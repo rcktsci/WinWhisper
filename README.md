@@ -6,7 +6,7 @@
 Нативная утилита в трее: один exe на 2.8 МБ, статический MFC, ни зависимостей, ни установщика.
 Распознавание — любой **OpenAI-совместимый** Whisper (облако или свой локальный сервер).
 
-[![build](https://github.com/SimSonic/WinWhisper/actions/workflows/build.yml/badge.svg)](https://github.com/SimSonic/WinWhisper/actions/workflows/build.yml)
+[![build](https://github.com/rcktsci/WinWhisper/actions/workflows/build.yml/badge.svg)](https://github.com/rcktsci/WinWhisper/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![toolset](https://img.shields.io/badge/MSVC%202022%2F2026-C%2B%2B17-5C2D91)
 ![deps](https://img.shields.io/badge/dependencies-none-success)
@@ -89,7 +89,7 @@ msbuild WinWhisper.vcxproj /p:Configuration=Release /p:Platform=x64 /m
 Готовый файл — `x64\Release\WinWhisper.exe`. Проект по умолчанию просит тулсет `v145` (VS 2026);
 на VS 2022 или в CI переопределяется так: `/p:PlatformToolset=v143`.
 
-Готовые сборки лежат в [Releases](https://github.com/SimSonic/WinWhisper/releases) — exe прикладывается к каждому тегу автоматически.
+Готовые сборки лежат в [Releases](https://github.com/rcktsci/WinWhisper/releases) — exe прикладывается к каждому тегу автоматически.
 
 ## ⚙️ Настройка
 
