@@ -99,6 +99,25 @@ public:
         return ReadString(key);
     }
 
+    // Numbers, true/false/null: everything up to the next structural character.
+    bool ReadBareToken(std::wstring& out)
+    {
+        SkipWs();
+        const size_t start = i_;
+        while (i_ < s_.size()) {
+            const char c = s_[i_];
+            if (c == ',' || c == '}' || c == ']' || c == ' ' || c == '\t' ||
+                c == '\r' || c == '\n')
+                break;
+            ++i_;
+        }
+        if (i_ == start)
+            return false;
+        const std::string raw = s_.substr(start, i_ - start);
+        out.assign(raw.begin(), raw.end());
+        return true;
+    }
+
     bool SkipValue()
     {
         SkipWs();
@@ -373,6 +392,11 @@ std::string LastErrorText(DWORD error)
 
 CStringW ExtractTranscriptText(const std::string& json)
 {
+    return ExtractTranscriptText(json, nullptr);
+}
+
+CStringW ExtractTranscriptText(const std::string& json, TranscriptResult* out)
+{
     JsonScanner sc(json);
     if (!sc.Consume('{'))
         return CStringW();
@@ -410,6 +434,17 @@ CStringW ExtractTranscriptText(const std::string& json)
                             std::wstring value;
                             if (sc.ReadString(value))
                                 joined += CStringW(DecodeUtf8(value).c_str());
+                        } else if (out != nullptr && util::WideToUtf8(segKey) == "avg_logprob" &&
+                                   !sc.Peek('"') && !sc.Peek('{') && !sc.Peek('[')) {
+                            // Keep the worst segment: one invented line is enough
+                            // to poison the phrase.
+                            std::wstring number;
+                            if (sc.ReadBareToken(number)) {
+                                const double value = _wtof(number.c_str());
+                                if (!out->hasAvgLogprob || value < out->avgLogprob)
+                                    out->avgLogprob = value;
+                                out->hasAvgLogprob = true;
+                            }
                         } else if (!sc.SkipValue()) {
                             break;
                         }
@@ -433,6 +468,77 @@ CStringW ExtractTranscriptText(const std::string& json)
 
     CStringW result = !topText.Trim().IsEmpty() ? topText : joined;
     return result;
+}
+
+bool LooksInvented(const CStringW& text, double seconds, const TranscriptResult& result,
+                   CStringW* reason)
+{
+    CStringW trimmed = text;
+    trimmed.Trim();
+    if (trimmed.IsEmpty())
+        return false;
+
+    // --- physics: how fast can a person talk? -------------------------------
+    int words = 0;
+    bool inWord = false;
+    for (int i = 0; i < trimmed.GetLength(); ++i) {
+        const bool separator = iswspace(trimmed[i]) != 0;
+        if (!separator && !inWord)
+            ++words;
+        inWord = !separator;
+    }
+
+    if (seconds >= 0.3) {
+        const double perSecond = words / seconds;
+        if (perSecond > 3.5) {
+            if (reason != nullptr) {
+                reason->Format(L"%d слов за %.1f с — так не говорят", words, seconds);
+            }
+            return true;
+        }
+    }
+
+    // --- degeneration: one word repeated over and over ------------------------
+    int repeats = 1;
+    int best = 1;
+    CStringW previous;
+    int start = 0;
+    while (start <= trimmed.GetLength()) {
+        int end = trimmed.Find(L' ', start);
+        if (end < 0)
+            end = trimmed.GetLength();
+        CStringW word = trimmed.Mid(start, end - start);
+        word.Trim();
+        if (!word.IsEmpty()) {
+            if (!previous.IsEmpty() && word.CompareNoCase(previous) == 0) {
+                ++repeats;
+                if (repeats > best)
+                    best = repeats;
+            } else {
+                repeats = 1;
+            }
+            previous = word;
+        }
+        if (end >= trimmed.GetLength())
+            break;
+        start = end + 1;
+    }
+    if (best >= 3) {
+        if (reason != nullptr)
+            reason->Format(L"одно слово повторено %d раза подряд", best);
+        return true;
+    }
+
+    // --- the model's own confidence ------------------------------------------
+    if (result.hasAvgLogprob && result.avgLogprob < -0.70) {
+        if (reason != nullptr) {
+            reason->Format(L"уверенность модели %.2f (норма выше -0.55; на выдумке бывает -0.7…-1.0)",
+                           result.avgLogprob);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 WhisperClient::~WhisperClient()
@@ -582,7 +688,7 @@ TranscriptResult WhisperClient::Send(const TranscriptRequest& request)
               doneAt - requestStart, static_cast<int>(response.size()));
 
     if (result.httpStatus >= 200 && result.httpStatus < 300) {
-        result.text = ExtractTranscriptText(response);
+        result.text = ExtractTranscriptText(response, &result);
         result.ok = true;
         return result;
     }

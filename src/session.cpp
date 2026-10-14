@@ -9,6 +9,7 @@
 #include "audio_encode.h"
 #include "util.h"
 #include "wav.h"
+#include "whisper_client.h"
 
 namespace {
 
@@ -307,11 +308,49 @@ void Session::WorkerMain()
             result = client_.Send(request);
         }
 
+        // HTTP 200 with an empty text means the server found no speech. For a
+        // segment that really is silence that is the correct answer, but the same
+        // reply also shows up when the compressed upload hid the speech - and
+        // then the phrase disappears without a trace. Retry those uncompressed
+        // once before believing the silence.
+        const double seconds = job.pcm.size() / static_cast<double>(kTargetSampleRate);
+        if (result.ok && result.text.Trim().IsEmpty() && request.contentType != L"audio/wav" &&
+            seconds >= 1.2) {
+            util::Log(L"[http] пустой ответ на %.2f с (M4A), повторяю без сжатия", seconds);
+            audioenc::Upload fallback =
+                audioenc::BuildUpload(job.pcm, audioenc::Format::Wav, bitrate);
+            request.wav = std::move(fallback.bytes);
+            request.fileName = fallback.fileName;
+            request.contentType = fallback.contentType;
+            const TranscriptResult retry = client_.Send(request);
+            if (retry.ok && !retry.text.IsEmpty()) {
+                util::Log(L"[http] без сжатия речь нашлась — дело было в M4A");
+                result = retry;
+            } else {
+                util::Log(L"[http] и без сжатия тишина: похоже, в сегменте правда нет речи");
+            }
+        }
+
         Result stored;
         stored.ok = result.ok;
         CStringW text = result.text;
         stored.text = text.Trim();
         stored.error = result.error;
+
+        // Refuse invented text. Whisper happily returns a confident-looking
+        // sentence for audio that holds no speech at all, and that sentence goes
+        // straight into the user's document if nobody checks it.
+        if (stored.ok && !stored.text.IsEmpty()) {
+            CStringW why;
+            if (LooksInvented(stored.text, seconds, result, &why)) {
+                util::Log(L"[stt] похоже на выдумку модели (%.2f с): %s — текст отброшен: \"%s\"",
+                          seconds, why.GetString(), stored.text.GetString());
+                stored.text.Empty();
+            }
+        }
+
+        if (stored.ok && stored.text.IsEmpty())
+            util::Log(L"[stt] сегмент %.2f с: сервер не нашёл речи", seconds);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);

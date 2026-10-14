@@ -26,6 +26,9 @@ struct TranscriptResult {
     CStringW text;
     CStringW error;                // already user-readable
     int httpStatus = 0;
+    // Confidence the server reported for the worst segment, when it reports one.
+    bool hasAvgLogprob = false;
+    double avgLogprob = 0.0;
 };
 
 // ---------------------------------------------------------------------------
@@ -63,3 +66,25 @@ private:
 
 // Pulls "text" (or the joined "segments") out of a JSON body.
 CStringW ExtractTranscriptText(const std::string& json);
+
+// Same, but also reports the worst per-segment confidence the server sent.
+CStringW ExtractTranscriptText(const std::string& json, TranscriptResult* out);
+
+// ---------------------------------------------------------------------------
+//  Hallucination guard.
+//
+//  Whisper does not say "I did not understand"; on audio that is too short or
+//  too quiet it confidently invents text. Two reproducible examples measured
+//  against a live server: half a second of speech came back as
+//  "во во во во во во", and 0.8 s of speech produced a four-word subtitle
+//  credit. `no_speech_prob` stays at 0.0 in both cases, so the model's own
+//  "was there speech" flag is useless here. What does separate the two worlds:
+//
+//    words per second | real speech: 0.7-1.2 | invented: 4.9 and 12.0
+//    avg_logprob      | real speech: -0.04..-0.55 | invented: -0.73..-0.95
+//
+//  So the guard checks physics first (nobody speaks four words a second) and the
+//  model's confidence second. Returns true when the text should not be trusted.
+// ---------------------------------------------------------------------------
+bool LooksInvented(const CStringW& text, double seconds, const TranscriptResult& result,
+                   CStringW* reason);

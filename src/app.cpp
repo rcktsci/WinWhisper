@@ -394,8 +394,18 @@ void CHostWindow::DeliverReadyText()
         return;
     }
 
-    if (text.IsEmpty())
+    if (text.IsEmpty()) {
+        // The server answers HTTP 200 with an empty text when the segment holds
+        // no speech. Returning quietly here is what made a phrase look like it
+        // had been swallowed, so say it out loud instead.
+        OverlayModel model;
+        model.state = OverlayState::Error;
+        model.error = L"Не расслышал — повторите";
+        overlay_.Update(model);
+        errorTicks_ = kErrorTicks;
+        util::Log(L"[stt] пустой ответ сервера, вставлять нечего");
         return;
+    }
 
     InsertOptions options;
     options.appendSpace = settings_.appendSpace;
@@ -875,8 +885,13 @@ int RunInject(const CStringW& path)
             ++failures;
             continue;
         }
-        emit(L"[%d] %.2f s -> %s", static_cast<int>(i), seconds, result.text.GetString());
-        accumulated += util::WideToUtf8(result.text) + " ";
+        CStringW text = result.text;
+        text.Trim();
+        CStringW invented;
+        if (LooksInvented(text, seconds, result, &invented))
+            emit(L"      ОТБРОШЕНО как выдумка модели: %s", invented.GetString());
+        emit(L"[%d] %.2f s -> %s", static_cast<int>(i), seconds, text.GetString());
+        accumulated += util::WideToUtf8(text) + " ";
     }
 
     emit(L"report        : %s", reportPath.GetString());
