@@ -29,7 +29,9 @@ jobs:
             Write-Error "В репозитории найдено похожее на секрет:`n$bad"
             exit 1
           }
+          # git grep возвращает 1, когда совпадений нет - гасим это явно.
           Write-Host 'Секретов не найдено'
+          exit 0
       - name: MSBuild в PATH
         uses: microsoft/setup-msbuild@v3
 
