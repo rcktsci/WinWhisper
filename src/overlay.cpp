@@ -121,6 +121,9 @@ private:
 // ---------------------------------------------------------------------------
 ID2D1Factory* g_d2dFactory = nullptr;
 IDWriteFactory* g_dwriteFactory = nullptr;
+ID2D1DCRenderTarget* g_dcTarget = nullptr;
+IDWriteTextFormat* g_emojiFormat = nullptr;
+float g_emojiFormatSize = 0.0f;
 
 bool EnsureDirectWrite()
 {
@@ -129,7 +132,14 @@ bool EnsureDirectWrite()
     if (g_dwriteFactory == nullptr)
         ::DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                               reinterpret_cast<IUnknown**>(&g_dwriteFactory));
-    return g_d2dFactory != nullptr && g_dwriteFactory != nullptr;
+    if (g_dwriteFactory != nullptr && g_dcTarget == nullptr) {
+        const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.0f, 96.0f,
+            D2D1_RENDER_TARGET_USAGE_NONE, D2D1_FEATURE_LEVEL_DEFAULT);
+        g_d2dFactory->CreateDCRenderTarget(&props, &g_dcTarget);
+    }
+    return g_dcTarget != nullptr && g_dwriteFactory != nullptr;
 }
 
 // Returns false when Direct2D cannot bind the DC (a 16-bit desktop, say); the
@@ -139,43 +149,43 @@ bool DrawEmoji(CDC& dc, const CRect& box, float size, COLORREF fallbackColor)
     if (!EnsureDirectWrite())
         return false;
 
-    const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-        D2D1_RENDER_TARGET_TYPE_DEFAULT,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.0f, 96.0f,
-        D2D1_RENDER_TARGET_USAGE_NONE, D2D1_FEATURE_LEVEL_DEFAULT);
-
-    ID2D1DCRenderTarget* target = nullptr;
-    if (FAILED(g_d2dFactory->CreateDCRenderTarget(&props, &target)))
+    // The target and the text format are reused between frames: the panel
+    // redraws about thirty times a second, and building them each time is pure
+    // waste.
+    if (g_emojiFormat == nullptr || g_emojiFormatSize != size) {
+        if (g_emojiFormat != nullptr) {
+            g_emojiFormat->Release();
+            g_emojiFormat = nullptr;
+        }
+        if (SUCCEEDED(g_dwriteFactory->CreateTextFormat(
+                L"Segoe UI Emoji", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, size, L"", &g_emojiFormat))) {
+            g_emojiFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            g_emojiFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            g_emojiFormatSize = size;
+        }
+    }
+    if (g_emojiFormat == nullptr)
         return false;
 
     const RECT bind = {box.left, box.top, box.right, box.bottom};
-    bool ok = false;
-    if (SUCCEEDED(target->BindDC(dc.GetSafeHdc(), &bind))) {
-        IDWriteTextFormat* format = nullptr;
-        if (SUCCEEDED(g_dwriteFactory->CreateTextFormat(
-                L"Segoe UI Emoji", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL, size, L"", &format))) {
-            format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    if (FAILED(g_dcTarget->BindDC(dc.GetSafeHdc(), &bind)))
+        return false;
 
-            ID2D1SolidColorBrush* brush = nullptr;
-            if (SUCCEEDED(target->CreateSolidColorBrush(
-                    D2D1::ColorF(GetRValue(fallbackColor) / 255.0f,
-                                 GetGValue(fallbackColor) / 255.0f,
-                                 GetBValue(fallbackColor) / 255.0f, 1.0f),
-                    &brush))) {
-                target->BeginDraw();
-                target->DrawText(kMicEmoji, 2, format,
-                                 D2D1::RectF(0.0f, 0.0f, static_cast<float>(box.Width()),
-                                             static_cast<float>(box.Height())),
-                                 brush);
-                ok = SUCCEEDED(target->EndDraw());
-                brush->Release();
-            }
-            format->Release();
-        }
-    }
-    target->Release();
+    ID2D1SolidColorBrush* brush = nullptr;
+    if (FAILED(g_dcTarget->CreateSolidColorBrush(
+            D2D1::ColorF(GetRValue(fallbackColor) / 255.0f, GetGValue(fallbackColor) / 255.0f,
+                         GetBValue(fallbackColor) / 255.0f, 1.0f),
+            &brush)))
+        return false;
+
+    g_dcTarget->BeginDraw();
+    g_dcTarget->DrawText(kMicEmoji, 2, g_emojiFormat,
+                         D2D1::RectF(0.0f, 0.0f, static_cast<float>(box.Width()),
+                                     static_cast<float>(box.Height())),
+                         brush);
+    const bool ok = SUCCEEDED(g_dcTarget->EndDraw());
+    brush->Release();
     return ok;
 }
 
@@ -233,23 +243,25 @@ void OverlayWindow::BuildMetrics(int dpiOverride)
     }
     dpi_ = static_cast<int>(dpi);
 
+    // Compact: the panel only has to hold a disc, one line of status and four
+    // small targets, so it stays out of the way of whatever is underneath.
     Metrics m;
-    m.width = Scale(340, dpi_);
-    m.height = Scale(152, dpi_);
-    m.micRadius = Scale(30, dpi_);
+    m.width = Scale(316, dpi_);
+    m.height = Scale(126, dpi_);
+    m.micRadius = Scale(26, dpi_);
     m.micCx = m.width / 2;
-    m.micCy = Scale(70, dpi_);
-    m.closeX = m.width - Scale(21, dpi_);
-    m.closeY = Scale(17, dpi_);
-    m.gearX = Scale(28, dpi_);
-    m.gearY = m.height - Scale(25, dpi_);
-    m.helpX = m.width - Scale(28, dpi_);
-    m.helpY = m.height - Scale(25, dpi_);
-    m.buttonRadius = Scale(13, dpi_);
-    m.statusTop = Scale(110, dpi_);
-    m.statusHeight = Scale(22, dpi_);
-    m.handleY = Scale(10, dpi_);
-    m.handleWidth = Scale(36, dpi_);
+    m.micCy = Scale(56, dpi_);
+    m.closeX = m.width - Scale(19, dpi_);
+    m.closeY = Scale(16, dpi_);
+    m.gearX = Scale(23, dpi_);
+    m.gearY = m.height - Scale(21, dpi_);
+    m.helpX = m.width - Scale(23, dpi_);
+    m.helpY = m.height - Scale(21, dpi_);
+    m.buttonRadius = Scale(12, dpi_);
+    m.statusTop = Scale(88, dpi_);
+    m.statusHeight = Scale(20, dpi_);
+    m.handleY = Scale(9, dpi_);
+    m.handleWidth = Scale(34, dpi_);
     metrics_ = m;
 
     BuildFonts();
@@ -443,6 +455,12 @@ OverlayWindow::~OverlayWindow()
 
 void OverlayWindow::BuildFonts()
 {
+    // Fonts depend on the scale only, and the panel repaints tens of times a
+    // second for the level ring: rebuilding four fonts per frame was pure churn.
+    if (fontsReady_ && fontsDpi_ == dpi_)
+        return;
+    fontsDpi_ = dpi_;
+
     iconSmall_.DeleteObject();
     textFont_.DeleteObject();
     helpFont_.DeleteObject();
@@ -464,8 +482,11 @@ void OverlayWindow::BuildFonts()
     fontsReady_ = iconSmall_.GetSafeHandle() != nullptr;
 }
 
-CSize OverlayWindow::PanelSize() const
+CSize OverlayWindow::PanelSizeForDpi(int dpi)
 {
+    // Measures without drawing: a fresh memory DC only has a 1x1 monochrome
+    // bitmap, so a "trial render" into it would be clipped to one pixel anyway.
+    BuildMetrics(dpi);
     return CSize(metrics_.width, metrics_.height);
 }
 void OverlayWindow::DrawGlyph(CDC& dc, CFont& font, wchar_t code, const CRect& box, COLORREF color)
@@ -508,8 +529,8 @@ void OverlayWindow::Render(CDC& dc, int dpi, const OverlayModel& model)
     EnsureGdiPlus();
     dpi_ = dpi;
     model_ = model;
+    // BuildMetrics also refreshes the fonts for this scale.
     BuildMetrics(dpi);
-    BuildFonts();
 
     dc.FillSolidRect(CRect(0, 0, metrics_.width, metrics_.height), kSurface);
 
@@ -678,8 +699,14 @@ bool RenderPanelToPng(const CStringW& path, int dpi, CStringW* error)
         return false;
     }
 
-    // Render off-screen at the requested scale.
     OverlayWindow panel;
+    const CSize size = panel.PanelSizeForDpi(dpi);
+    if (size.cx <= 0 || size.cy <= 0) {
+        if (error != nullptr)
+            *error = L"не удалось измерить панель";
+        return false;
+    }
+
     OverlayModel model;
     model.state = OverlayState::Listening;
     model.level = 0.62f;
@@ -689,21 +716,15 @@ bool RenderPanelToPng(const CStringW& path, int dpi, CStringW* error)
     CClientDC screen(nullptr);
     CDC mem;
     mem.CreateCompatibleDC(&screen);
-
-    // The panel is its own thing; measure it first so the bitmap fits.
-    panel.Render(mem, dpi, model);
-    const CSize size = panel.PanelSize();
-    if (size.cx <= 0 || size.cy <= 0) {
-        if (error != nullptr)
-            *error = L"не удалось измерить панель";
-        mem.DeleteDC();
-        return false;
-    }
-
     CBitmap bitmap;
     bitmap.CreateCompatibleBitmap(&screen, size.cx, size.cy);
     CBitmap* old = mem.SelectObject(&bitmap);
+
     panel.Render(mem, dpi, model);
+
+    // GDI+ refuses a bitmap that is still selected into a DC, so put the old one
+    // back first.
+    mem.SelectObject(old);
 
     Gdiplus::Bitmap image(static_cast<HBITMAP>(bitmap.GetSafeHandle()), nullptr);
     CLSID pngEncoder{};
@@ -713,7 +734,6 @@ bool RenderPanelToPng(const CStringW& path, int dpi, CStringW* error)
     if (!ok && error != nullptr)
         *error = L"не удалось сохранить PNG";
 
-    mem.SelectObject(old);
     bitmap.DeleteObject();
     mem.DeleteDC();
     return ok;

@@ -29,11 +29,11 @@ struct Settings {
     double thresholdRatio = 3.0;
 
     // --- Text injection ----------------------------------------------------
-    // Win+Shift+Q by default: free on a stock Windows 11 and reachable with the left
+    // Win+Shift+Z by default: free on a stock Windows 11 and reachable with the left
     // hand. Windows itself uses Win+H, and Win+Shift+A/C/M/P/R/S/T/V/W are taken.
     // The Win key can also bring the shell forward, so the app remembers the last
     // window that really held a caret and prefers it over the taskbar or Start.
-    CStringW hotkey = L"Win+Shift+Q";
+    CStringW hotkey = L"Win+Shift+Z";
     bool appendSpace = true;
     bool newlineAsShiftEnter = true;
     bool clipboardFallback = true;

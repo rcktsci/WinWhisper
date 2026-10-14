@@ -30,7 +30,7 @@ struct VadConfig {
     // can open a phantom utterance before the user has said anything. During the
     // warm-up the detector only calibrates; the audio still goes into the
     // pre-roll, so a word spoken this early is not lost.
-    double warmupMs = 300.0;
+    double warmupMs = 250.0;
 };
 
 class Vad {

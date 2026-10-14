@@ -2,6 +2,9 @@
 
 #include <afxdialogex.h>
 
+#include <atomic>
+#include <memory>
+
 #include "resource.h"
 #include "settings.h"
 
@@ -24,6 +27,7 @@ protected:
     LRESULT OnModelsResult(WPARAM wParam, LPARAM lParam);
     afx_msg void OnTest();
     afx_msg void OnRefreshModels();
+    afx_msg void OnDestroy();
     afx_msg void OnOk();
     DECLARE_MESSAGE_MAP()
 
@@ -35,4 +39,7 @@ private:
 
     Settings settings_;
     bool changed_ = false;
+    // Cleared when the dialog goes away, so a worker that finishes afterwards
+    // frees its own payload instead of posting it to a destroyed window.
+    std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
 };

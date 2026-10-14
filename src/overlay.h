@@ -38,7 +38,7 @@ public:
     void Render(CDC& dc, int dpi, const OverlayModel& model);
 
     // Panel dimensions at the given scale, needed to size an off-screen bitmap.
-    CSize PanelSize() const;
+    CSize PanelSizeForDpi(int dpi);
 
     std::function<void()> onClose;
     std::function<void()> onSettings;
@@ -90,6 +90,7 @@ private:
     CFont helpFont_;     // Segoe UI, question mark
     CFont emojiFont_;    // Segoe UI Emoji, the microphone
     int dpi_ = 96;
+    int fontsDpi_ = 0;   // scale the current fonts were built for
     bool fontsReady_ = false;
     bool dragging_ = false;
     int dragOffsetX_ = 0;

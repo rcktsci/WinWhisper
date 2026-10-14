@@ -17,7 +17,7 @@ struct LanguageEntry {
 };
 
 const LanguageEntry kLanguages[] = {
-    {L"Автоопределение", L""}, {L"Русский", L"ru"},     {L"Английский", L"en"},
+    {L"Авто", L""},          {L"Русский", L"ru"},     {L"Английский", L"en"},
     {L"Украинский", L"uk"},    {L"Немецкий", L"de"},    {L"Французский", L"fr"},
     {L"Испанский", L"es"},     {L"Польский", L"pl"},    {L"Турецкий", L"tr"},
     {L"Китайский", L"zh"},     {L"Японский", L"ja"},    {L"Корейский", L"ko"},
@@ -36,6 +36,7 @@ const AudioFormatEntry kAudioFormats[] = {
 
 struct ProbeJob {
     HWND owner = nullptr;
+    std::shared_ptr<std::atomic<bool>> alive;
     CStringW baseUrl;
     CStringW apiKey;
     CStringW model;
@@ -45,12 +46,14 @@ struct ProbeJob {
 
 DWORD WINAPI ProbeThread(LPVOID param)
 {
-    ProbeJob* job = static_cast<ProbeJob*>(param);
+    std::unique_ptr<ProbeJob> job(static_cast<ProbeJob*>(param));
     int status = 0;
     CStringW error;
     job->ok = WhisperClient::Probe(job->baseUrl, job->apiKey, job->model, 10000, &error, &status);
     job->message = error;
-    ::PostMessageW(job->owner, WM_PROBE_DONE, 0, reinterpret_cast<LPARAM>(job));
+    // The dialog may be long gone; then the payload dies with the thread.
+    if (job->alive != nullptr && job->alive->load())
+        ::PostMessageW(job->owner, WM_PROBE_DONE, 0, reinterpret_cast<LPARAM>(job.release()));
     return 0;
 }
 
@@ -63,6 +66,7 @@ constexpr UINT WM_MODELS_DONE = WM_APP + 78;
 
 struct ModelsJob {
     HWND owner = nullptr;
+    std::shared_ptr<std::atomic<bool>> alive;
     CStringW baseUrl;
     CStringW apiKey;
     std::vector<CStringW> models;
@@ -71,11 +75,12 @@ struct ModelsJob {
 
 DWORD WINAPI ModelsThread(LPVOID param)
 {
-    ModelsJob* job = static_cast<ModelsJob*>(param);
+    std::unique_ptr<ModelsJob> job(static_cast<ModelsJob*>(param));
     CStringW error;
     if (!WhisperClient::ListModels(job->baseUrl, job->apiKey, 8000, &job->models, &error))
         job->error = error;
-    ::PostMessageW(job->owner, WM_MODELS_DONE, 0, reinterpret_cast<LPARAM>(job));
+    if (job->alive != nullptr && job->alive->load())
+        ::PostMessageW(job->owner, WM_MODELS_DONE, 0, reinterpret_cast<LPARAM>(job.release()));
     return 0;
 }
 
@@ -100,6 +105,7 @@ BEGIN_MESSAGE_MAP(CSettingsDialog, CDialogEx)
     ON_BN_CLICKED(IDOK, &CSettingsDialog::OnOk)
     ON_MESSAGE(WM_PROBE_DONE, &CSettingsDialog::OnProbeResult)
     ON_MESSAGE(WM_MODELS_DONE, &CSettingsDialog::OnModelsResult)
+    ON_WM_DESTROY()
 END_MESSAGE_MAP()
 
 
@@ -129,6 +135,7 @@ void CSettingsDialog::StartModelFetch()
 {
     ModelsJob* job = new ModelsJob();
     job->owner = GetSafeHwnd();
+    job->alive = alive_;
     // Take whatever is in the fields right now: the user may have just changed
     // the address or the key and expects the list to match.
     job->baseUrl = ControlText(*this, IDC_BASE_URL);
@@ -152,6 +159,13 @@ void CSettingsDialog::OnRefreshModels()
     StartModelFetch();
 }
 
+void CSettingsDialog::OnDestroy()
+{
+    // Anything still in flight now knows there is nobody left to answer.
+    alive_->store(false);
+    CDialogEx::OnDestroy();
+}
+
 LRESULT CSettingsDialog::OnModelsResult(WPARAM, LPARAM lParam)
 {
     std::unique_ptr<ModelsJob> job(reinterpret_cast<ModelsJob*>(lParam));
@@ -160,7 +174,7 @@ LRESULT CSettingsDialog::OnModelsResult(WPARAM, LPARAM lParam)
         refresh->EnableWindow(TRUE);
 
     CComboBox* combo = static_cast<CComboBox*>(GetDlgItem(IDC_MODEL));
-    if (combo == nullptr)
+    if (combo == nullptr || !job)
         return 0;
 
     if (job->models.empty()) {
@@ -190,13 +204,16 @@ LRESULT CSettingsDialog::OnModelsResult(WPARAM, LPARAM lParam)
         (transcribes ? speech : others).push_back(model);
     }
 
-    for (const CStringW& model : speech)
+    // A gateway also serves chat, embedding and image models; none of them can
+    // transcribe anything, so they are not offered. If nothing matches - some
+    // other server may name its models differently - the full list is shown
+    // rather than an empty one.
+    const std::vector<CStringW>& shown = speech.empty() ? job->models : speech;
+    for (const CStringW& model : shown)
         combo->AddString(model);
-    for (const CStringW& model : others)
-        combo->AddString(model);
-
-    // Keep what the user had; if the field was empty, select the first entry.
-    SetDlgItemText(IDC_MODEL, current.IsEmpty() ? job->models.front() : current);
+    // Keep what the user had; if the field was empty, select the first entry of
+    // what was actually offered, not of the raw server list.
+    SetDlgItemText(IDC_MODEL, current.IsEmpty() ? shown.front() : current);
     util::Log(L"[models] получено %d моделей (%d речевых)", static_cast<int>(job->models.size()),
               static_cast<int>(speech.size()));
     return 0;
@@ -375,6 +392,7 @@ void CSettingsDialog::OnTest()
 
     auto* job = new ProbeJob();
     job->owner = GetSafeHwnd();
+    job->alive = alive_;
     job->baseUrl = settings_.baseUrl;
     job->apiKey = settings_.apiKey;
     job->model = settings_.model;

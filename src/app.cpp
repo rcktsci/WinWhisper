@@ -890,7 +890,13 @@ int RunInject(const CStringW& path)
         CStringW invented;
         if (LooksInvented(text, seconds, result, &invented))
             emit(L"      ОТБРОШЕНО как выдумка модели: %s", invented.GetString());
-        emit(L"[%d] %.2f s -> %s", static_cast<int>(i), seconds, text.GetString());
+        // Printing the confidence makes it visible whether the server reports it
+        // at all: without it only the physics half of the guard can work.
+        if (result.hasAvgLogprob)
+            emit(L"[%d] %.2f s, avg_logprob %.2f -> %s", static_cast<int>(i), seconds,
+                 result.avgLogprob, text.GetString());
+        else
+            emit(L"[%d] %.2f s -> %s", static_cast<int>(i), seconds, text.GetString());
         accumulated += util::WideToUtf8(text) + " ";
     }
 
@@ -1117,7 +1123,7 @@ BOOL CWinWhisperApp::InitInstance()
     Settings settings;
     settings.Load();
     util::SetLogEnabled(settings.debugLog);
-    util::Log(L"WinWhisper 1.0 start");
+    util::Log(L"WinWhisper 1.1.0 start");
 
     host->ApplyInitialSettings(settings);
 

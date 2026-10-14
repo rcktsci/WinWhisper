@@ -523,7 +523,9 @@ bool LooksInvented(const CStringW& text, double seconds, const TranscriptResult&
             break;
         start = end + 1;
     }
-    if (best >= 3) {
+    // Four, not three: a person really does say "да, да, да", while Whisper's
+    // degeneration loops run much longer than that.
+    if (best >= 4) {
         if (reason != nullptr)
             reason->Format(L"одно слово повторено %d раза подряд", best);
         return true;
@@ -569,7 +571,7 @@ bool WhisperClient::EnsureSession(const CStringW& host, unsigned short port, boo
     }
     CloseSession();
 
-    HINTERNET session = ::WinHttpOpen(L"WinWhisper/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    HINTERNET session = ::WinHttpOpen(L"WinWhisper/1.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (session == nullptr)
         return false;
@@ -720,7 +722,7 @@ bool WhisperClient::ListModels(const CStringW& baseUrl, const CStringW& apiKey, 
         return false;
     }
 
-    HINTERNET session = ::WinHttpOpen(L"WinWhisper/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    HINTERNET session = ::WinHttpOpen(L"WinWhisper/1.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (session == nullptr) {
         if (error != nullptr)
