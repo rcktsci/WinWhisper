@@ -16,10 +16,10 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: MSBuild в PATH
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
 
       # Проект по умолчанию просит тулсет v145 (Visual Studio 2026);
       # на раннере стоит VS 2022, поэтому явно берём v143.
@@ -44,7 +44,7 @@ jobs:
           }
 
       - name: Артефакт
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: WinWhisper-x64
           path: x64/Release/WinWhisper.exe
