@@ -51,9 +51,12 @@ DWORD WINAPI ProbeThread(LPVOID param)
     CStringW error;
     job->ok = WhisperClient::Probe(job->baseUrl, job->apiKey, job->model, 10000, &error, &status);
     job->message = error;
-    // The dialog may be long gone; then the payload dies with the thread.
-    if (job->alive != nullptr && job->alive->load())
-        ::PostMessageW(job->owner, WM_PROBE_DONE, 0, reinterpret_cast<LPARAM>(job.release()));
+
+    // Same trap as in ModelsThread: never touch the pointer after release().
+    const HWND owner = job->owner;
+    const bool alive = job->alive != nullptr && job->alive->load();
+    if (alive && owner != nullptr)
+        ::PostMessageW(owner, WM_PROBE_DONE, 0, reinterpret_cast<LPARAM>(job.release()));
     return 0;
 }
 
@@ -79,8 +82,15 @@ DWORD WINAPI ModelsThread(LPVOID param)
     CStringW error;
     if (!WhisperClient::ListModels(job->baseUrl, job->apiKey, 8000, &job->models, &error))
         job->error = error;
-    if (job->alive != nullptr && job->alive->load())
-        ::PostMessageW(job->owner, WM_MODELS_DONE, 0, reinterpret_cast<LPARAM>(job.release()));
+
+    // Read the address and the flag BEFORE releasing the pointer. Argument order
+    // is unspecified in C++, and MSC evaluates job.release() first - which nulls
+    // the unique_ptr, so `job->owner` in the same call dereferenced nullptr and
+    // took the whole application down with 0xC0000005.
+    const HWND owner = job->owner;
+    const bool alive = job->alive != nullptr && job->alive->load();
+    if (alive && owner != nullptr)
+        ::PostMessageW(owner, WM_MODELS_DONE, 0, reinterpret_cast<LPARAM>(job.release()));
     return 0;
 }
 

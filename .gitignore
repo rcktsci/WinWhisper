@@ -38,3 +38,7 @@ ipch/
 Thumbs.db
 desktop.ini
 *.swp
+
+# Карта линковки и дампы
+*.map
+*.dmp

@@ -35,6 +35,9 @@ namespace {
 
 constexpr UINT WM_TRAYICON = WM_APP + 1;
 constexpr UINT WM_TOGGLE_DICTATION = WM_APP + 2;
+// Lets a second launch (or a script) ask the running copy for its settings
+// window; WM_COMMAND cannot be posted across processes.
+constexpr UINT WM_TOGGLE_SETTINGS = WM_APP + 3;
 
 constexpr UINT ID_TRAY_LISTEN = 40001;
 constexpr UINT ID_TRAY_SETTINGS = 40002;
@@ -131,6 +134,7 @@ protected:
     afx_msg LRESULT OnTray(WPARAM wParam, LPARAM lParam);
     afx_msg LRESULT OnWinCommand(WPARAM wParam, LPARAM lParam);
     afx_msg LRESULT OnToggle(WPARAM wParam, LPARAM lParam);
+    afx_msg LRESULT OnToggleSettings(WPARAM wParam, LPARAM lParam);
     afx_msg void OnHotKey(UINT id, UINT hotKeyId, UINT lParam);
     afx_msg LRESULT OnTaskbarCreated(WPARAM wParam, LPARAM lParam);
     afx_msg LRESULT OnQueryEndSession(WPARAM wParam, LPARAM lParam);
@@ -166,6 +170,7 @@ BEGIN_MESSAGE_MAP(CHostWindow, CWnd)
     ON_MESSAGE(WM_TRAYICON, &CHostWindow::OnTray)
     ON_MESSAGE(WM_COMMAND, &CHostWindow::OnWinCommand)
     ON_MESSAGE(WM_TOGGLE_DICTATION, &CHostWindow::OnToggle)
+    ON_MESSAGE(WM_TOGGLE_SETTINGS, &CHostWindow::OnToggleSettings)
     ON_WM_HOTKEY()
     ON_MESSAGE(WM_QUERYENDSESSION, &CHostWindow::OnQueryEndSession)
     ON_WM_TIMER()
@@ -551,6 +556,12 @@ void CHostWindow::OnHotKey(UINT id, UINT hotKeyId, UINT lParam)
         errorTicks_ = 0;
         StartDictation();
     }
+}
+
+LRESULT CHostWindow::OnToggleSettings(WPARAM, LPARAM)
+{
+    HandleCommand(ID_TRAY_SETTINGS);
+    return 0;
 }
 
 void CHostWindow::HandleCommand(UINT id)
@@ -1113,7 +1124,13 @@ BOOL CWinWhisperApp::InitInstance()
     // Only one copy may own the global hotkey.
     HWND existing = ::FindWindowW(L"WinWhisperHiddenHost", nullptr);
     if (existing != nullptr) {
-        ::PostMessageW(existing, WM_TOGGLE_DICTATION, 0, 0);
+        // A second launch just pokes the running copy. WM_COMMAND cannot cross a
+        // process boundary for messages below WM_USER, so the request travels as
+        // a WM_APP message instead.
+        if (::wcsstr(::GetCommandLineW(), L"--settings") != nullptr)
+            ::PostMessageW(existing, WM_TOGGLE_SETTINGS, 0, 0);
+        else
+            ::PostMessageW(existing, WM_TOGGLE_DICTATION, 0, 0);
         return FALSE;
     }
 
@@ -1123,7 +1140,8 @@ BOOL CWinWhisperApp::InitInstance()
     Settings settings;
     settings.Load();
     util::SetLogEnabled(settings.debugLog);
-    util::Log(L"WinWhisper 1.1.0 start");
+    util::Log(L"WinWhisper 1.1.1 start");
+    util::InstallCrashHandler();
 
     host->ApplyInitialSettings(settings);
 

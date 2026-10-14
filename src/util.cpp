@@ -1,5 +1,6 @@
 #include "util.h"
 
+#include <dbghelp.h>
 #include <shlwapi.h>
 
 #include <cstdarg>
@@ -187,6 +188,105 @@ HWND TakePendingForeground()
     HWND h = g_pendingForeground;
     g_pendingForeground = nullptr;
     return h;
+}
+
+// ---------------------------------------------------------------- crash ----
+
+namespace {
+
+// Resolves an address against the PDB that sits next to the executable and
+// writes "module!function+offset (file:line)" into the log.
+void ReportAddress(HANDLE process, DWORD64 address, const wchar_t* what)
+{
+    char storage[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+    auto* symbol = reinterpret_cast<SYMBOL_INFO*>(storage);
+    symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbol->MaxNameLen = MAX_SYM_NAME;
+
+    DWORD64 displacement = 0;
+    wchar_t name[512] = {};
+    if (::SymFromAddr(process, address, &displacement, symbol)) {
+        ::MultiByteToWideChar(CP_UTF8, 0, symbol->Name, -1, name, ARRAYSIZE(name));
+    } else {
+        wcscpy_s(name, L"<unknown>");
+    }
+
+    IMAGEHLP_LINE64 line = {};
+    line.SizeOfStruct = sizeof(line);
+    DWORD lineDisplacement = 0;
+    wchar_t location[512] = {};
+    if (::SymGetLineFromAddr64(process, address, &lineDisplacement, &line)) {
+        wchar_t file[400] = {};
+        ::MultiByteToWideChar(CP_UTF8, 0, line.FileName, -1, file, ARRAYSIZE(file));
+        swprintf_s(location, L" (%s:%lu)", file, line.LineNumber);
+    }
+
+    Log(L"[crash] %s 0x%llX = %s+0x%llX%s", what, address, name, displacement, location);
+}
+
+LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info)
+{
+    const DWORD code = info->ExceptionRecord->ExceptionCode;
+    const DWORD64 address = reinterpret_cast<DWORD64>(info->ExceptionRecord->ExceptionAddress);
+    Log(L"[crash] exception 0x%08X at 0x%p", code, info->ExceptionRecord->ExceptionAddress);
+
+    HANDLE process = ::GetCurrentProcess();
+    ::SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+    // The PDB lives next to the exe; the running directory may be anything.
+    wchar_t modulePath[MAX_PATH] = {};
+    ::GetModuleFileNameW(nullptr, modulePath, ARRAYSIZE(modulePath));
+    if (wchar_t* slash = wcsrchr(modulePath, L'\\'))
+        *slash = L'\0';
+
+    if (::SymInitializeW(process, modulePath, TRUE)) {
+        ReportAddress(process, address, L"faulting");
+
+        // Walk the stack so the caller chain is visible too.
+        CONTEXT context = *info->ContextRecord;
+        STACKFRAME64 frame = {};
+        frame.AddrPC.Offset = context.Rip;
+        frame.AddrPC.Mode = AddrModeFlat;
+        frame.AddrFrame.Offset = context.Rbp;
+        frame.AddrFrame.Mode = AddrModeFlat;
+        frame.AddrStack.Offset = context.Rsp;
+        frame.AddrStack.Mode = AddrModeFlat;
+
+        for (int depth = 0; depth < 20; ++depth) {
+            if (!::StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, ::GetCurrentThread(), &frame,
+                               &context, nullptr, ::SymFunctionTableAccess64, ::SymGetModuleBase64,
+                               nullptr))
+                break;
+            if (frame.AddrPC.Offset == 0)
+                break;
+            ReportAddress(process, frame.AddrPC.Offset, L"  frame");
+        }
+
+        // A dump makes it possible to look at the wreckage later.
+        const CStringW dump = EnsureAppDataDir() + L"\\crash.dmp";
+        HANDLE file = ::CreateFileW(dump.GetString(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            MINIDUMP_EXCEPTION_INFORMATION details = {};
+            details.ThreadId = ::GetCurrentThreadId();
+            details.ExceptionPointers = info;
+            details.ClientPointers = FALSE;
+            if (::MiniDumpWriteDump(process, ::GetCurrentProcessId(), file,
+                                    static_cast<MINIDUMP_TYPE>(MiniDumpWithDataSegs |
+                                                               MiniDumpWithIndirectlyReferencedMemory),
+                                    &details, nullptr, nullptr))
+                Log(L"[crash] dump: %s", dump.GetString());
+            ::CloseHandle(file);
+        }
+    }
+
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+}  // namespace
+
+void InstallCrashHandler()
+{
+    ::SetUnhandledExceptionFilter(CrashFilter);
 }
 
 }  // namespace util

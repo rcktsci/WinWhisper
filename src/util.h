@@ -31,4 +31,10 @@ int ParseInt(const CStringW& text, int fallback);
 void SetPendingForeground(HWND hwnd);
 HWND TakePendingForeground();
 
+// ---------------------------------------------------------------- crash ----
+// A shipped build has no debugger attached, so the faulting address, the symbol
+// name, the source line and a minidump go to the log and next to it. Without
+// this a crash report says only "0xc0000005 in WinWhisper.exe".
+void InstallCrashHandler();
+
 }  // namespace util

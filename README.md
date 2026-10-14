@@ -130,6 +130,9 @@ WinWhisper.exe --inject C:\path\to\speech.wav
 :: отрисовать панель в PNG (для проверки вида, без всплывания на рабочем столе)
 WinWhisper.exe --panel-shot docs\panel.png
 WinWhisper.exe --panel-shot docs\panel@2x.png --dpi=144
+
+:: открыть настройки у уже запущенной копии (второй запуск будит первую)
+WinWhisper.exe --settings
 ```
 
 Отчёты: `%TEMP%\WinWhisper-selftest.txt` и `%TEMP%\WinWhisper-inject.txt`.
@@ -139,6 +142,21 @@ WinWhisper.exe --panel-shot docs\panel@2x.png --dpi=144
 - `make-icons.ps1` — перегенерировать иконки (чистая математика, без зависимостей);
 - `ui-probe.ps1` — открыть панель хоткеем и сохранить её скриншот;
 - `e2e-test.ps1` — сквозной прогон: Блокнот, синтез речи, проверка вставки.
+
+## 🩺 Если что-то упало
+
+В приложении стоит обработчик необработанных исключений, а Release-сборка несёт PDB, поэтому в
+`%APPDATA%\WinWhisper\winwhisper.log` попадает не «0xC0000005 где-то там», а точное место:
+
+```
+[crash] exception 0xC0000005 at 0x00007FF76A4D9D8B
+[crash] faulting 0x7FF76A4D9D8B = ModelsThread+0xEB (src\settings_dlg.cpp:83)
+[crash] dump: C:\Users\...\AppData\Roaming\WinWhisper\crash.dmp
+```
+
+Рядом кладётся минидамп `crash.dmp` — открывается в Visual Studio или WinDbg. Именно так нашлось
+падение в списке моделей: `unique_ptr::release()` и `job->owner` стояли в одном вызове, порядок
+вычисления аргументов в C++ не определён, и компилятор обнулял указатель раньше, чем читал поле.
 
 ## ⚠️ Честные ограничения
 
