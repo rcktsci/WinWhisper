@@ -21,12 +21,15 @@ protected:
     void DoDataExchange(CDataExchange* dx) override;
     BOOL OnInitDialog() override;
     LRESULT OnProbeResult(WPARAM wParam, LPARAM lParam);
+    LRESULT OnModelsResult(WPARAM wParam, LPARAM lParam);
     afx_msg void OnTest();
+    afx_msg void OnRefreshModels();
     afx_msg void OnOk();
     DECLARE_MESSAGE_MAP()
 
 private:
     void FillControls();
+    void StartModelFetch();
     bool ReadControls(CStringW* error);
     void SetHotkeyLabel();
 

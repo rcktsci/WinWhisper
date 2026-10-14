@@ -699,6 +699,135 @@ TranscriptResult WhisperClient::Send(const TranscriptRequest& request)
 
 
 
+bool WhisperClient::ListModels(const CStringW& baseUrl, const CStringW& apiKey, int timeoutMs,
+                               std::vector<CStringW>* models, CStringW* error)
+{
+    if (models != nullptr)
+        models->clear();
+
+    // GET {base}/models. Built by hand like the rest of the client, so the app
+    // keeps zero third-party dependencies.
+    CStringW url = baseUrl;
+    url.Trim();
+    while (url.GetLength() > 0 && url[url.GetLength() - 1] == L'/')
+        url = url.Left(url.GetLength() - 1);
+    url += L"/models";
+
+    Url parsed = ParseUrl(url);
+    if (!parsed.valid) {
+        if (error != nullptr)
+            *error = L"Некорректный адрес сервера";
+        return false;
+    }
+
+    HINTERNET session = ::WinHttpOpen(L"WinWhisper/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (session == nullptr) {
+        if (error != nullptr)
+            *error = L"Не удалось открыть WinHTTP";
+        return false;
+    }
+
+    const int timeout = timeoutMs > 0 ? timeoutMs : 8000;
+    ::WinHttpSetTimeouts(session, timeout, timeout, timeout, timeout);
+
+    bool ok = false;
+    HINTERNET connection = ::WinHttpConnect(session, parsed.host.GetString(), parsed.port, 0);
+    HINTERNET request = nullptr;
+    if (connection != nullptr) {
+        const wchar_t* verb = L"GET";
+        request = ::WinHttpOpenRequest(connection, verb, parsed.path.GetString(), nullptr,
+                                       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                       parsed.secure ? WINHTTP_FLAG_SECURE : 0);
+    }
+
+    if (request != nullptr) {
+        CStringW headers = L"Accept: application/json\r\n";
+        if (!apiKey.IsEmpty()) {
+            CStringW auth;
+            auth.Format(L"Authorization: Bearer %s\r\n", apiKey.GetString());
+            headers += auth;
+        }
+        if (::WinHttpSendRequest(request, headers.GetString(), static_cast<DWORD>(-1),
+                                 WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+            ::WinHttpReceiveResponse(request, nullptr)) {
+            std::string body;
+            DWORD available = 0;
+            do {
+                available = 0;
+                if (!::WinHttpQueryDataAvailable(request, &available) || available == 0)
+                    break;
+                const size_t offset = body.size();
+                body.resize(offset + available);
+                DWORD read = 0;
+                if (!::WinHttpReadData(request, &body[offset], available, &read))
+                    break;
+                body.resize(offset + read);
+            } while (available > 0);
+
+            // "data":[{"id":"whisper-1", ...}, ...] - an id is all we need.
+            // The gateway answers {"data":[{"id":"whisper-1",...}]}, but a bare
+            // array or a different wrapper is just as legal, and the body may be
+            // pretty-printed. Rather than depend on a shape, collect every "id"
+            // value: nothing else in a model listing carries that key.
+            const std::string& text = body;
+            size_t at = 0;
+            while ((at = text.find("\"id\"", at)) != std::string::npos) {
+                at += 4;
+                auto skipSpace = [&text, &at] {
+                    while (at < text.size() && (text[at] == ' ' || text[at] == '\t' ||
+                                                text[at] == '\r' || text[at] == '\n'))
+                        ++at;
+                };
+                skipSpace();
+                if (at >= text.size() || text[at] != ':')
+                    continue;
+                ++at;
+                skipSpace();
+                if (at >= text.size() || text[at] != '"')
+                    continue;
+                const size_t valueStart = ++at;
+                while (at < text.size() && text[at] != '"') {
+                    if (text[at] == '\\' && at + 1 < text.size())
+                        ++at;
+                    ++at;
+                }
+                if (at >= text.size())
+                    break;
+                if (models != nullptr) {
+                    // DecodeUtf8 wants the raw UTF-8 bytes held one per wchar_t.
+                    const std::string raw = text.substr(valueStart, at - valueStart);
+                    const std::wstring wide(raw.begin(), raw.end());
+                    models->push_back(CStringW(DecodeUtf8(wide).c_str()));
+                }
+                ++at;
+            }
+            DWORD status = 0;
+            DWORD statusSize = sizeof(status);
+            ::WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                  WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize,
+                                  WINHTTP_NO_HEADER_INDEX);
+            util::Log(L"[models] HTTP %lu, %d байт, моделей: %d", status,
+                      static_cast<int>(body.size()),
+                      models != nullptr ? static_cast<int>(models->size()) : 0);
+            ok = models == nullptr || !models->empty();
+            if (!ok && error != nullptr)
+                *error = L"Сервер ответил, но список моделей пуст";
+        } else if (error != nullptr) {
+            error->Format(L"Не удалось запросить список моделей (код %lu)", ::GetLastError());
+        }
+    } else if (error != nullptr) {
+        error->Format(L"Не удалось подключиться к %s", parsed.host.GetString());
+    }
+
+    if (request != nullptr)
+        ::WinHttpCloseHandle(request);
+    if (connection != nullptr)
+        ::WinHttpCloseHandle(connection);
+    ::WinHttpCloseHandle(session);
+    return ok;
+}
+
 bool WhisperClient::Probe(const CStringW& baseUrl, const CStringW& apiKey, const CStringW& model,
                           int timeoutMs, CStringW* error, int* httpStatus)
 {

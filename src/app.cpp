@@ -1019,6 +1019,22 @@ int RunSelfTest()
              error.GetString());
         if (!ok)
             ++failures;
+
+        // The same call the settings dialog makes to fill its model list.
+        std::vector<CStringW> models;
+        CStringW listError;
+        if (WhisperClient::ListModels(settings.baseUrl, settings.apiKey, 10000, &models,
+                                      &listError)) {
+            CStringW joined;
+            for (size_t i = 0; i < models.size(); ++i) {
+                if (i > 0)
+                    joined += L", ";
+                joined += models[i];
+            }
+            emit(L"models        : %d — %s", static_cast<int>(models.size()), joined.GetString());
+        } else {
+            emit(L"models        : FAILED %s", listError.GetString());
+        }
     }
 
     emit(L"report        : %s", reportPath.GetString());
@@ -1066,6 +1082,26 @@ BOOL CWinWhisperApp::InitInstance()
         if (path.GetLength() >= 2 && path[0] == L'"' && path[path.GetLength() - 1] == L'"')
             path = path.Mid(1, path.GetLength() - 2);
         ::ExitProcess(static_cast<UINT>(RunInject(path)));
+    }
+
+    // Renders the panel to a PNG. Lets the look be checked (and screenshotted)
+    // without opening the panel on somebody's desktop.
+    if (const wchar_t* shot = ::wcsstr(::GetCommandLineW(), L"--panel-shot")) {
+        CStringW path(shot + 12);
+        // Stop at the next switch: a path may contain spaces, but it never
+        // contains " --".
+        const int nextSwitch = path.Find(L" --");
+        if (nextSwitch > 0)
+            path = path.Left(nextSwitch);
+        path.Trim();
+        if (path.GetLength() >= 2 && path[0] == L'"' && path[path.GetLength() - 1] == L'"')
+            path = path.Mid(1, path.GetLength() - 2);
+        const int dpi = (::wcsstr(::GetCommandLineW(), L"--dpi=144") != nullptr) ? 144 : 96;
+        CStringW error;
+        const bool ok = overlay::RenderPanelToPng(path, dpi, &error);
+        util::Log(L"[panel-shot] %s -> %s %s", ok ? L"ok" : L"failed", path.GetString(),
+                  error.GetString());
+        ::ExitProcess(ok ? 0 : 1);
     }
 
     // Only one copy may own the global hotkey.

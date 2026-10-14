@@ -1,5 +1,6 @@
 #include "settings_dlg.h"
 
+#include <cwctype>
 #include <memory>
 
 #include "resource.h"
@@ -53,6 +54,31 @@ DWORD WINAPI ProbeThread(LPVOID param)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+//  Model list, fetched in the background so opening the dialog is instant.
+//  The list is a convenience: the combo stays editable, so a server that does
+//  not implement /models (or a name that is not listed) still works.
+// ---------------------------------------------------------------------------
+constexpr UINT WM_MODELS_DONE = WM_APP + 78;
+
+struct ModelsJob {
+    HWND owner = nullptr;
+    CStringW baseUrl;
+    CStringW apiKey;
+    std::vector<CStringW> models;
+    CStringW error;
+};
+
+DWORD WINAPI ModelsThread(LPVOID param)
+{
+    ModelsJob* job = static_cast<ModelsJob*>(param);
+    CStringW error;
+    if (!WhisperClient::ListModels(job->baseUrl, job->apiKey, 8000, &job->models, &error))
+        job->error = error;
+    ::PostMessageW(job->owner, WM_MODELS_DONE, 0, reinterpret_cast<LPARAM>(job));
+    return 0;
+}
+
 CStringW ControlText(CWnd& dlg, int id)
 {
     CStringW text;
@@ -70,8 +96,10 @@ bool IsBoxChecked(CWnd& dlg, int id)
 
 BEGIN_MESSAGE_MAP(CSettingsDialog, CDialogEx)
     ON_BN_CLICKED(IDC_TEST, &CSettingsDialog::OnTest)
+    ON_BN_CLICKED(IDC_REFRESH_MODELS, &CSettingsDialog::OnRefreshModels)
     ON_BN_CLICKED(IDOK, &CSettingsDialog::OnOk)
     ON_MESSAGE(WM_PROBE_DONE, &CSettingsDialog::OnProbeResult)
+    ON_MESSAGE(WM_MODELS_DONE, &CSettingsDialog::OnModelsResult)
 END_MESSAGE_MAP()
 
 
@@ -90,7 +118,88 @@ BOOL CSettingsDialog::OnInitDialog()
     CenterWindow();
     ::SetForegroundWindow(GetSafeHwnd());
     ::BringWindowToTop(GetSafeHwnd());
+
+    // Fill the model list from the server in the background: the dialog must not
+    // wait on the network, and the user may already be typing.
+    StartModelFetch();
     return TRUE;
+}
+
+void CSettingsDialog::StartModelFetch()
+{
+    ModelsJob* job = new ModelsJob();
+    job->owner = GetSafeHwnd();
+    // Take whatever is in the fields right now: the user may have just changed
+    // the address or the key and expects the list to match.
+    job->baseUrl = ControlText(*this, IDC_BASE_URL);
+    job->apiKey = ControlText(*this, IDC_API_KEY);
+
+    if (CWnd* refresh = GetDlgItem(IDC_REFRESH_MODELS))
+        refresh->EnableWindow(FALSE);
+
+    HANDLE thread = ::CreateThread(nullptr, 0, ModelsThread, job, 0, nullptr);
+    if (thread != nullptr) {
+        ::CloseHandle(thread);
+    } else {
+        delete job;
+        if (CWnd* refresh = GetDlgItem(IDC_REFRESH_MODELS))
+            refresh->EnableWindow(TRUE);
+    }
+}
+
+void CSettingsDialog::OnRefreshModels()
+{
+    StartModelFetch();
+}
+
+LRESULT CSettingsDialog::OnModelsResult(WPARAM, LPARAM lParam)
+{
+    std::unique_ptr<ModelsJob> job(reinterpret_cast<ModelsJob*>(lParam));
+
+    if (CWnd* refresh = GetDlgItem(IDC_REFRESH_MODELS))
+        refresh->EnableWindow(TRUE);
+
+    CComboBox* combo = static_cast<CComboBox*>(GetDlgItem(IDC_MODEL));
+    if (combo == nullptr)
+        return 0;
+
+    if (job->models.empty()) {
+        // No list is not an error the user must act on: the field still works.
+        util::Log(L"[models] список не получен: %s",
+                  job->error.IsEmpty() ? L"сервер не сообщил моделей" : job->error.GetString());
+        return 0;
+    }
+
+    const CStringW current = ControlText(*this, IDC_MODEL);
+    combo->ResetContent();
+
+    // A gateway lists everything it serves - chat, embeddings, image models. The
+    // ones that can transcribe are the only interesting ones here, so they go to
+    // the top and the rest follow in server order.
+    std::vector<CStringW> speech;
+    std::vector<CStringW> others;
+    for (const CStringW& model : job->models) {
+        CStringW lower;
+        for (int i = 0; i < model.GetLength(); ++i)
+            lower.AppendChar(static_cast<wchar_t>(::towlower(model[i])));
+
+        const bool transcribes =
+            lower.Find(L"whisper") >= 0 || lower.Find(L"gigaam") >= 0 ||
+            lower.Find(L"parakeet") >= 0 || lower.Find(L"asr") >= 0 ||
+            lower.Find(L"transcri") >= 0 || lower.Find(L"podlodka") >= 0;
+        (transcribes ? speech : others).push_back(model);
+    }
+
+    for (const CStringW& model : speech)
+        combo->AddString(model);
+    for (const CStringW& model : others)
+        combo->AddString(model);
+
+    // Keep what the user had; if the field was empty, select the first entry.
+    SetDlgItemText(IDC_MODEL, current.IsEmpty() ? job->models.front() : current);
+    util::Log(L"[models] получено %d моделей (%d речевых)", static_cast<int>(job->models.size()),
+              static_cast<int>(speech.size()));
+    return 0;
 }
 
 void CSettingsDialog::FillControls()

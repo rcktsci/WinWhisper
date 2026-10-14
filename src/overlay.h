@@ -33,6 +33,13 @@ public:
     void Update(const OverlayModel& model);
     bool IsVisible() const;
 
+    // Draws the panel into any DC. Shared by OnPaint and by the --panel-shot
+    // preview mode, so a preview is byte-for-byte what users see on screen.
+    void Render(CDC& dc, int dpi, const OverlayModel& model);
+
+    // Panel dimensions at the given scale, needed to size an off-screen bitmap.
+    CSize PanelSize() const;
+
     std::function<void()> onClose;
     std::function<void()> onSettings;
     std::function<void()> onHelp;
@@ -66,7 +73,7 @@ private:
         int handleWidth = 0;
     };
 
-    void BuildMetrics();
+    void BuildMetrics(int dpiOverride = 0);
     void ApplyRegion();
     RECT ScreenRect() const;
     void BuildFonts();
@@ -81,9 +88,19 @@ private:
     CFont iconSmall_;    // Segoe MDL2 Assets, buttons
     CFont textFont_;     // Segoe UI, status line
     CFont helpFont_;     // Segoe UI, question mark
+    CFont emojiFont_;    // Segoe UI Emoji, the microphone
     int dpi_ = 96;
     bool fontsReady_ = false;
     bool dragging_ = false;
     int dragOffsetX_ = 0;
     int dragOffsetY_ = 0;
 };
+
+namespace overlay {
+
+// Renders the panel into a PNG. Used by the --panel-shot diagnostic so the
+// drawing can be inspected (and shown to whoever asked for a change) without
+// popping the panel up on a live desktop.
+bool RenderPanelToPng(const CStringW& path, int dpi, CStringW* error);
+
+}  // namespace overlay

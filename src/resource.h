@@ -28,6 +28,7 @@
 #define IDC_TEST              1018
 #define IDC_AUDIO_FORMAT      1019
 #define IDC_GLOSSARY          1020
+#define IDC_REFRESH_MODELS    1021
 
 // ---- String table ----------------------------------------------------------
 #define IDS_APP_NAME          1

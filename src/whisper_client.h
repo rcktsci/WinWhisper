@@ -51,6 +51,11 @@ public:
     static bool Probe(const CStringW& baseUrl, const CStringW& apiKey, const CStringW& model,
                       int timeoutMs, CStringW* error, int* httpStatus);
 
+    // GET {base}/models, so the settings dialog can offer the models the server
+    // actually has instead of making the user guess names.
+    static bool ListModels(const CStringW& baseUrl, const CStringW& apiKey, int timeoutMs,
+                           std::vector<CStringW>* models, CStringW* error);
+
 private:
     void CloseSession();
     bool EnsureSession(const CStringW& host, unsigned short port, bool secure,
