@@ -1,0 +1,62 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # нужно, чтобы приложить exe к релизу
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MSBuild в PATH
+        uses: microsoft/setup-msbuild@v2
+
+      # Проект по умолчанию просит тулсет v145 (Visual Studio 2026);
+      # на раннере стоит VS 2022, поэтому явно берём v143.
+      - name: Сборка (Release x64)
+        run: >
+          msbuild WinWhisper.vcxproj
+          /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+          /m /v:minimal /nologo
+
+      # Дымовой тест без сети: проверяются настройки и весь тракт детекции пауз.
+      # Приложение — GUI-подсистемы, поэтому PowerShell его не дожидается сам.
+      - name: Дымовой тест (без сети)
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'x64\Release\WinWhisper.exe'
+          $proc = Start-Process -FilePath $exe -ArgumentList '--selftest','--offline' -Wait -PassThru
+          $report = Join-Path $env:TEMP 'WinWhisper-selftest.txt'
+          if (Test-Path $report) { Get-Content $report }
+          if ($proc.ExitCode -ne 0) {
+            Write-Error "Самопроверка не прошла (код $($proc.ExitCode))"
+            exit 1
+          }
+
+      - name: Артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinWhisper-x64
+          path: x64/Release/WinWhisper.exe
+          if-no-files-found: error
+
+      # Тег вида v1.0.0 -> релиз с готовым exe внутри
+      - name: Релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = 'x64\Release\WinWhisper.exe'
+          $tag = $env:GITHUB_REF_NAME
+          gh release create $tag $exe --title "WinWhisper $tag" --generate-notes
