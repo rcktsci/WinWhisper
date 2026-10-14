@@ -53,6 +53,7 @@ void Vad::SetSampleRate(int rate)
     silenceSamples_ = MsToSamples(cfg_.silenceMs, rate);
     minSpeechSamples_ = MsToSamples(cfg_.minSpeechMs, rate);
     maxSegmentSamples_ = MsToSamples(cfg_.maxSegmentMs, rate);
+    warmupTotal_ = MsToSamples(cfg_.warmupMs, rate);
 
     frame_.resize(frameSamples_);
     pending_.reserve(std::max(pending_.capacity(), prerollSamples_ * 4));
@@ -71,6 +72,7 @@ void Vad::Reset()
     silenceRun_ = 0;
     inSpeech_ = false;
     onsetFrames_ = 0;
+    warmupSamples_ = warmupTotal_;
     // Start low and let the tracker climb if the room turns out to be noisy:
     // guessing high is what silently swallowed the first phrase of a session.
     noiseFloor_ = cfg_.absFloorRms;
@@ -160,6 +162,15 @@ void Vad::ProcessFrame(const int16_t* samples, size_t count)
 
         pending_.insert(pending_.end(), samples, samples + count);
         TrimPreRoll();
+
+        // Right after the stream opens the buffers contain the device's pop.
+        // Calibrate on it, but do not let it open an utterance; it still lands
+        // in the pre-roll, so nothing spoken this early is thrown away.
+        if (warmupSamples_ > 0) {
+            warmupSamples_ = warmupSamples_ > count ? warmupSamples_ - count : 0;
+            onsetFrames_ = 0;
+            return;
+        }
 
         // Loud clicks bypass the zero-crossing gate so a fricative-initial word
         // is not lost to a single unlucky frame. Two frames in a row are needed

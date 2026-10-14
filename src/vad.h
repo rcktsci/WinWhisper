@@ -26,6 +26,11 @@ struct VadConfig {
     double stopRatio = 1.6;     // ... and keeps going until below noiseFloor * stopRatio
     double absFloorRms = 0.004; // ~ -48 dBFS; below this nothing counts as speech
     double maxZcr = 0.32;       // rejects clicks / keyboard noise at onset
+    // Opening a WASAPI stream pops: the first buffers are broadband noise that
+    // can open a phantom utterance before the user has said anything. During the
+    // warm-up the detector only calibrates; the audio still goes into the
+    // pre-roll, so a word spoken this early is not lost.
+    double warmupMs = 300.0;
 };
 
 class Vad {
@@ -68,6 +73,8 @@ private:
     size_t silenceSamples_ = 11200;
     size_t minSpeechSamples_ = 4000;
     size_t maxSegmentSamples_ = 320000;
+    size_t warmupSamples_ = 4800;        // remaining warm-up, counts down
+    size_t warmupTotal_ = 4800;
 
     SegmentSink sink_;
 
