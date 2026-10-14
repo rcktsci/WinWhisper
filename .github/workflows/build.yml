@@ -18,6 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Проверка на секреты
+        shell: pwsh
+        run: |
+          $bad = git grep -n -I -E 'sk-[A-Za-z0-9]{8,}|AQAAANCMnd8BFdERjHoAwE|gh[pousr]_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY'
+          if ($bad) {
+            Write-Error "В репозитории найдено похожее на секрет:`n$bad"
+            exit 1
+          }
+          Write-Host 'Секретов не найдено'
       - name: MSBuild в PATH
         uses: microsoft/setup-msbuild@v3
 
