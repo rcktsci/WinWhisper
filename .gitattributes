@@ -1,0 +1,10 @@
+# Line endings: the repository is LF everywhere. Several files had grown a mix of
+# CRLF and LF lines, which shows up as phantom hunks in every later diff.
+* text=auto eol=lf
+
+# Not text, whatever git may guess: the resource script is UTF-16, the rest is
+# images and crash dumps.
+*.rc binary
+*.ico binary
+*.png binary
+*.dmp binary
