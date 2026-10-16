@@ -138,6 +138,25 @@ void Log(const wchar_t* fmt, ...)
                 &written, nullptr);
 }
 
+void WriteAliveMarker(const CStringW& text)
+{
+    const CStringW path = EnsureAppDataDir() + L"\\alive.txt";
+    HANDLE file = ::CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+
+    SYSTEMTIME st = {};
+    ::GetLocalTime(&st);
+    CStringW line;
+    line.Format(L"%02d:%02d:%02d %s\r\n", st.wHour, st.wMinute, st.wSecond, text.GetString());
+
+    DWORD written = 0;
+    ::WriteFile(file, line.GetString(), static_cast<DWORD>(line.GetLength() * sizeof(wchar_t)),
+                &written, nullptr);
+    ::CloseHandle(file);
+}
+
 // --------------------------------------------------------------- numbers ---
 
 CStringW FormatDouble(double value, int digits)

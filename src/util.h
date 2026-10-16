@@ -21,6 +21,12 @@ void SetLogEnabled(bool enabled);
 bool IsLogEnabled();
 void Log(const wchar_t* fmt, ...);
 
+// A one-line file rewritten while the app runs. Nothing in Windows records a
+// process that was killed with TerminateProcess - no crash dump, no exit code,
+// no event-log entry - so the timestamp of this file is the only way to tell
+// when such a death happened, and the text says what the app was doing.
+void WriteAliveMarker(const CStringW& text);
+
 // --------------------------------------------------------------- numbers ---
 CStringW FormatDouble(double value, int digits = 1);
 bool ParseDouble(const CStringW& text, double& out);

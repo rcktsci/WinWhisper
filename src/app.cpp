@@ -48,7 +48,7 @@ constexpr UINT_PTR TIMER_UI = 1;
 
 // The version in one place for the log; the resource script and the manifest
 // carry the same number for the file properties Windows shows.
-constexpr wchar_t kVersion[] = L"1.1.3";
+constexpr wchar_t kVersion[] = L"1.1.4";
 
 // How long an error stays on screen before the panel disappears again.
 constexpr int kErrorTicks = 90;  // ~3 s at 33 ms
@@ -143,6 +143,7 @@ protected:
     afx_msg void OnHotKey(UINT id, UINT hotKeyId, UINT lParam);
     afx_msg LRESULT OnTaskbarCreated(WPARAM wParam, LPARAM lParam);
     afx_msg LRESULT OnQueryEndSession(WPARAM wParam, LPARAM lParam);
+    afx_msg LRESULT OnEndSession(WPARAM wParam, LPARAM lParam);
     afx_msg void OnTimer(UINT_PTR timerId);
     afx_msg void OnContextMenu(CWnd* parent, CPoint point);
     afx_msg void OnDestroy();
@@ -156,6 +157,7 @@ private:
     bool RegisterHotkey(const CStringW& spec, CStringW& error);
     void ArmHook(bool armed);
     void ToggleAutoStart();
+    void TouchAlive(const wchar_t* state);
     void OpenSettings();
     void Poll();
     void DeliverReadyText();
@@ -168,6 +170,8 @@ private:
     bool hotkeyActive_ = false;
     bool active_ = false;
     int errorTicks_ = 0;
+    ULONGLONG startedTick_ = 0;
+    ULONGLONG aliveTick_ = 0;
     HWND lastCaretWindow_ = nullptr;   // last non-shell foreground, for Win-key hotkeys
     Settings settings_;
 };
@@ -179,6 +183,7 @@ BEGIN_MESSAGE_MAP(CHostWindow, CWnd)
     ON_MESSAGE(WM_TOGGLE_SETTINGS, &CHostWindow::OnToggleSettings)
     ON_WM_HOTKEY()
     ON_MESSAGE(WM_QUERYENDSESSION, &CHostWindow::OnQueryEndSession)
+    ON_MESSAGE(WM_ENDSESSION, &CHostWindow::OnEndSession)
     ON_WM_TIMER()
     ON_WM_CONTEXTMENU()
     ON_WM_DESTROY()
@@ -226,6 +231,11 @@ bool CHostWindow::CreateAndInit()
 
     session_.SetSettings(settings_);
     SetTimer(TIMER_UI, 33, nullptr);
+
+    startedTick_ = ::GetTickCount64();
+    aliveTick_ = startedTick_;
+    TouchAlive(L"запуск");
+    util::Log(L"[alive] маркер жизни: %s", (util::EnsureAppDataDir() + L"\\alive.txt").GetString());
     return true;
 }
 
@@ -447,6 +457,15 @@ void CHostWindow::DeliverReadyText()
 
 void CHostWindow::Poll()
 {
+    // Refresh the alive marker about once a minute. If the process is ever killed
+    // outright - which leaves no dump and no event - the file's timestamp is the
+    // only evidence of when it happened.
+    const ULONGLONG now = ::GetTickCount64();
+    if (now - aliveTick_ >= 60000) {
+        aliveTick_ = now;
+        TouchAlive(active_ ? L"диктовка" : L"ожидание");
+    }
+
     // Remember where the caret lives while nothing is happening. A hotkey that
     // uses the Windows key brings the shell forward, so the live foreground at
     // press time is not always the window the user was typing in.
@@ -656,6 +675,30 @@ LRESULT CHostWindow::OnQueryEndSession(WPARAM wParam, LPARAM lParam)
     (void)lParam;
     StopDictation(L"завершение сеанса Windows");
     return TRUE;
+}
+
+LRESULT CHostWindow::OnEndSession(WPARAM wParam, LPARAM lParam)
+{
+    (void)lParam;
+    // Windows is really ending the session this time (logoff or shutdown). Say so
+    // in the log: otherwise a process that goes away with the session looks
+    // exactly like one that was killed behind the user's back.
+    if (wParam != FALSE) {
+        util::Log(L"[exit] сеанс Windows завершается, приложение закрывается");
+        TouchAlive(L"завершение сеанса Windows");
+    }
+    return 0;
+}
+
+void CHostWindow::TouchAlive(const wchar_t* state)
+{
+    const ULONGLONG now = ::GetTickCount64();
+    const unsigned long long seconds = (now - startedTick_) / 1000;
+    CStringW text;
+    text.Format(L"pid=%lu up=%lluс hotkey=%s диктовка=%d — %s",
+                static_cast<unsigned long>(::GetCurrentProcessId()), seconds,
+                hotkeyActive_ ? L"да" : L"нет", active_ ? 1 : 0, state);
+    util::WriteAliveMarker(text);
 }
 
 void CHostWindow::OnTimer(UINT_PTR timerId)
@@ -1223,6 +1266,8 @@ int RunSelfTest()
 
 void CHostWindow::OnDestroy()
 {
+    util::Log(L"[exit] приложение закрывается штатно (DestroyWindow)");
+    TouchAlive(L"штатный выход");
     KillTimer(TIMER_UI);
     StopDictation(L"выход");
     ArmHook(false);
@@ -1314,18 +1359,31 @@ BOOL CWinWhisperApp::InitInstance()
             (void)0;   // already running: a logon launch has nothing left to do
         else
             ::PostMessageW(existing, WM_TOGGLE_DICTATION, 0, 0);
+        // Say it out loud: otherwise this short-lived process leaves a bare
+        // "WinWhisper exit" in the log with no start line above it, which looks
+        // exactly like the running copy having died on its own.
+        util::SetLogEnabled(true);
+        util::Log(L"[exit] другая копия уже работает — эта выходит");
         return FALSE;
     }
 
     auto* host = new CHostWindow();
     g_host = host;
-
     Settings settings;
     settings.Load();
     util::SetLogEnabled(settings.debugLog);
     const bool launchedAtLogon = cmdLine != nullptr && ::wcsstr(cmdLine, L"--autostart") != nullptr;
-    util::Log(L"WinWhisper %s start%s", kVersion, launchedAtLogon ? L" (автозапуск при входе)" : L"");
+    util::Log(L"WinWhisper %s start (pid=%lu)%s", kVersion,
+              static_cast<unsigned long>(::GetCurrentProcessId()),
+              launchedAtLogon ? L" (автозапуск при входе)" : L"");
     util::InstallCrashHandler();
+
+    // Ask Windows to bring the app back if it is closed for an update or fails
+    // with a crash. A manual kill (TerminateProcess) is not covered - that is
+    // what the alive marker is for. RESTART_NO_REBOOT: logon start-up already
+    // covers reboots, no need to be relaunched twice.
+    const DWORD restartStatus = ::RegisterApplicationRestart(L"--autostart", RESTART_NO_REBOOT);
+    util::Log(L"[alive] RegisterApplicationRestart -> %lu", restartStatus);
 
     // The registry decides what Windows runs; the INI field only mirrors it, so
     // the two cannot drift apart after a change made in Task Manager.
