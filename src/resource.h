@@ -20,7 +20,6 @@
 #define IDC_HOTKEY            1010
 #define IDC_APPLY_HOTKEY      1011
 #define IDC_APPEND_SPACE      1012
-#define IDC_SHIFT_ENTER       1013
 #define IDC_CLIPBOARD_FB      1014
 #define IDC_USE_PROMPT        1015
 #define IDC_AUTOSTART         1016

@@ -173,7 +173,6 @@ void Settings::Load()
 
     hotkey = GetStr(kSecInput, L"hotkey", hotkey, file);
     appendSpace = GetBool(kSecInput, L"append_space", appendSpace, file);
-    newlineAsShiftEnter = GetBool(kSecInput, L"newline_shift_enter", newlineAsShiftEnter, file);
     clipboardFallback = GetBool(kSecInput, L"clipboard_fallback", clipboardFallback, file);
     usePromptContext = GetBool(kSecInput, L"use_prompt_context", usePromptContext, file);
 
@@ -217,7 +216,6 @@ void Settings::Save() const
 
     PutStr(kSecInput, L"hotkey", hotkey, file);
     PutBool(kSecInput, L"append_space", appendSpace, file);
-    PutBool(kSecInput, L"newline_shift_enter", newlineAsShiftEnter, file);
     PutBool(kSecInput, L"clipboard_fallback", clipboardFallback, file);
     PutBool(kSecInput, L"use_prompt_context", usePromptContext, file);
 

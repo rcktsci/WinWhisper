@@ -273,9 +273,6 @@ void CSettingsDialog::FillControls()
     CButton* check = static_cast<CButton*>(GetDlgItem(IDC_APPEND_SPACE));
     if (check != nullptr)
         check->SetCheck(settings_.appendSpace ? BST_CHECKED : BST_UNCHECKED);
-    check = static_cast<CButton*>(GetDlgItem(IDC_SHIFT_ENTER));
-    if (check != nullptr)
-        check->SetCheck(settings_.newlineAsShiftEnter ? BST_CHECKED : BST_UNCHECKED);
     check = static_cast<CButton*>(GetDlgItem(IDC_CLIPBOARD_FB));
     if (check != nullptr)
         check->SetCheck(settings_.clipboardFallback ? BST_CHECKED : BST_UNCHECKED);
@@ -380,7 +377,6 @@ bool CSettingsDialog::ReadControls(CStringW* error)
     }
 
     next.appendSpace = IsBoxChecked(*this, IDC_APPEND_SPACE);
-    next.newlineAsShiftEnter = IsBoxChecked(*this, IDC_SHIFT_ENTER);
     next.clipboardFallback = IsBoxChecked(*this, IDC_CLIPBOARD_FB);
     next.usePromptContext = IsBoxChecked(*this, IDC_USE_PROMPT);
     next.autoStart = IsBoxChecked(*this, IDC_AUTOSTART);

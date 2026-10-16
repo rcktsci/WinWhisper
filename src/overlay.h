@@ -104,4 +104,9 @@ namespace overlay {
 // popping the panel up on a live desktop.
 bool RenderPanelToPng(const CStringW& path, int dpi, CStringW* error);
 
+// Saves any bitmap as PNG with the GDI+ encoder that already lives in this
+// translation unit. Used by --settings-shot, which paints a dialog nobody has to
+// open on screen.
+bool SaveBitmapToPng(HBITMAP bitmap, const CStringW& path, CStringW* error);
+
 }  // namespace overlay

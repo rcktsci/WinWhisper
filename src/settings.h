@@ -35,7 +35,6 @@ struct Settings {
     // window that really held a caret and prefers it over the taskbar or Start.
     CStringW hotkey = L"Win+Shift+Z";
     bool appendSpace = true;
-    bool newlineAsShiftEnter = true;
     bool clipboardFallback = true;
     bool usePromptContext = true;
 

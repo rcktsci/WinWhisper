@@ -110,7 +110,12 @@ bool TypeUnicode(const CStringW& text, const InsertOptions& options)
         if (ch == L'\r') {
             continue;
         } else if (ch == L'\n') {
-            ok = SendKey(VK_RETURN, options.newlineAsShiftEnter);
+            // Always Shift+Enter, and deliberately not a setting: a dictated
+            // line break is impossible in practice (every enumerated phrase
+            // tested came back as separate single-line segments), and of the two
+            // behaviours this is the harmless one - a plain Enter sends the
+            // message in a chat and runs a half-typed command in a terminal.
+            ok = SendKey(VK_RETURN, /*withShift=*/true);
         } else if (ch == L'\t') {
             ok = SendKey(VK_TAB, false);
         } else {

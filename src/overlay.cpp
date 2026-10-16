@@ -726,17 +726,40 @@ bool RenderPanelToPng(const CStringW& path, int dpi, CStringW* error)
     // back first.
     mem.SelectObject(old);
 
-    Gdiplus::Bitmap image(static_cast<HBITMAP>(bitmap.GetSafeHandle()), nullptr);
-    CLSID pngEncoder{};
-    bool ok = false;
-    if (PngEncoderClsid(&pngEncoder))
-        ok = image.Save(path.GetString(), &pngEncoder, nullptr) == Gdiplus::Ok;
-    if (!ok && error != nullptr)
-        *error = L"не удалось сохранить PNG";
+    const bool ok = SaveBitmapToPng(static_cast<HBITMAP>(bitmap.GetSafeHandle()), path, error);
 
     bitmap.DeleteObject();
     mem.DeleteDC();
     return ok;
+}
+
+bool SaveBitmapToPng(HBITMAP bitmap, const CStringW& path, CStringW* error)
+{
+    if (bitmap == nullptr) {
+        if (error != nullptr)
+            *error = L"пустой bitmap";
+        return false;
+    }
+    EnsureGdiPlus();
+    if (!g_gdiplusReady) {
+        if (error != nullptr)
+            *error = L"GDI+ не запустился";
+        return false;
+    }
+
+    Gdiplus::Bitmap image(bitmap, nullptr);
+    CLSID pngEncoder{};
+    if (!PngEncoderClsid(&pngEncoder)) {
+        if (error != nullptr)
+            *error = L"нет PNG-кодека в GDI+";
+        return false;
+    }
+    if (image.Save(path.GetString(), &pngEncoder, nullptr) != Gdiplus::Ok) {
+        if (error != nullptr)
+            *error = L"не удалось сохранить PNG: " + path;
+        return false;
+    }
+    return true;
 }
 
 }  // namespace overlay

@@ -46,6 +46,10 @@ constexpr UINT ID_TRAY_AUTOSTART = 40004;
 constexpr int HOTKEY_ID = 1;
 constexpr UINT_PTR TIMER_UI = 1;
 
+// The version in one place for the log; the resource script and the manifest
+// carry the same number for the file properties Windows shows.
+constexpr wchar_t kVersion[] = L"1.1.3";
+
 // How long an error stays on screen before the panel disappears again.
 constexpr int kErrorTicks = 90;  // ~3 s at 33 ms
 
@@ -416,7 +420,6 @@ void CHostWindow::DeliverReadyText()
 
     InsertOptions options;
     options.appendSpace = settings_.appendSpace;
-    options.newlineAsShiftEnter = settings_.newlineAsShiftEnter;
     options.clipboardFallback = settings_.clipboardFallback;
 
     CStringW insertError;
@@ -830,6 +833,75 @@ static bool LoadWavAs16kMono(const CStringW& path, std::vector<int16_t>* out, CS
     return true;
 }
 
+// Reads the value that follows a switch. A path may contain spaces, but it never
+// contains " --", which is where the next switch starts.
+CStringW PathAfterSwitch(const wchar_t* value)
+{
+    CStringW path(value);
+    const int nextSwitch = path.Find(L" --");
+    if (nextSwitch > 0)
+        path = path.Left(nextSwitch);
+    path.Trim();
+    if (path.GetLength() >= 2 && path[0] == L'"' && path[path.GetLength() - 1] == L'"')
+        path = path.Mid(1, path.GetLength() - 2);
+    return path;
+}
+
+// Renders the settings dialog into a PNG without putting it on the desktop.
+// Dialog layout is easy to get wrong and looking at the result is the only
+// honest check, so this mirrors --panel-shot for the panel.
+int RunSettingsShot(const CStringW& path)
+{
+    util::SetLogEnabled(true);
+
+    Settings settings;
+    settings.Load();
+
+    CSettingsDialog dialog(settings, nullptr);
+    if (!dialog.Create(IDD_SETTINGS, nullptr)) {
+        util::Log(L"[settings-shot] Create failed, err=%lu", ::GetLastError());
+        return 1;
+    }
+    // Create shows the window; park it outside every monitor so nothing flashes
+    // on the desktop of whoever is working.
+    dialog.SetWindowPos(nullptr, -32000, -32000, 0, 0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+    CRect rect;
+    dialog.GetWindowRect(&rect);
+    const int width = rect.Width();
+    const int height = rect.Height();
+    if (width <= 0 || height <= 0) {
+        util::Log(L"[settings-shot] пустой размер диалога");
+        dialog.DestroyWindow();
+        return 1;
+    }
+
+    CClientDC screen(nullptr);
+    CDC mem;
+    mem.CreateCompatibleDC(&screen);
+    CBitmap bitmap;
+    bitmap.CreateCompatibleBitmap(&screen, width, height);
+    CBitmap* old = mem.SelectObject(&bitmap);
+
+    // PRF_CHILDREN is the point of the exercise: every control paints itself, so
+    // a missing or overlapping one is visible in the image.
+    ::SendMessageW(dialog.GetSafeHwnd(), WM_PRINT, reinterpret_cast<WPARAM>(mem.GetSafeHdc()),
+                   PRF_CLIENT | PRF_NONCLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
+    mem.SelectObject(old);
+
+    CStringW error;
+    const bool ok = overlay::SaveBitmapToPng(static_cast<HBITMAP>(bitmap.GetSafeHandle()), path,
+                                             &error);
+    util::Log(L"[settings-shot] %s -> %s %dx%d %s", ok ? L"ok" : L"failed", path.GetString(), width,
+              height, error.GetString());
+
+    bitmap.DeleteObject();
+    mem.DeleteDC();
+    dialog.DestroyWindow();
+    return ok ? 0 : 1;
+}
+
 // Feeds a recorded clip through the very same detector and HTTP client the
 // microphone path uses. Handy before a first real dictation, and the only way to
 // verify the chain on a machine whose speakers the microphone cannot hear.
@@ -1189,21 +1261,20 @@ BOOL CWinWhisperApp::InitInstance()
     // Renders the panel to a PNG. Lets the look be checked (and screenshotted)
     // without opening the panel on somebody's desktop.
     if (const wchar_t* shot = ::wcsstr(::GetCommandLineW(), L"--panel-shot")) {
-        CStringW path(shot + 12);
-        // Stop at the next switch: a path may contain spaces, but it never
-        // contains " --".
-        const int nextSwitch = path.Find(L" --");
-        if (nextSwitch > 0)
-            path = path.Left(nextSwitch);
-        path.Trim();
-        if (path.GetLength() >= 2 && path[0] == L'"' && path[path.GetLength() - 1] == L'"')
-            path = path.Mid(1, path.GetLength() - 2);
+        const CStringW path = PathAfterSwitch(shot + 12);
         const int dpi = (::wcsstr(::GetCommandLineW(), L"--dpi=144") != nullptr) ? 144 : 96;
         CStringW error;
         const bool ok = overlay::RenderPanelToPng(path, dpi, &error);
         util::Log(L"[panel-shot] %s -> %s %s", ok ? L"ok" : L"failed", path.GetString(),
                   error.GetString());
         ::ExitProcess(ok ? 0 : 1);
+    }
+
+    // The same idea for the settings dialog: it is checked without opening it on
+    // somebody's screen, and the PNG can be shown to whoever asked for the change.
+    if (const wchar_t* shot = ::wcsstr(::GetCommandLineW(), L"--settings-shot")) {
+        const CStringW path = PathAfterSwitch(shot + 15);
+        ::ExitProcess(static_cast<UINT>(RunSettingsShot(path)));
     }
 
     // Windows launches the Run entry as: "C:\...\WinWhisper.exe" --autostart
@@ -1214,7 +1285,7 @@ BOOL CWinWhisperApp::InitInstance()
     if (cmdLine != nullptr && ::wcsstr(cmdLine, L"--autostart=") != nullptr) {
         const bool enable = ::wcsstr(cmdLine, L"--autostart=on") != nullptr;
         util::SetLogEnabled(true);
-        util::Log(L"WinWhisper 1.1.2 autostart-cli: %s", enable ? L"on" : L"off");
+        util::Log(L"WinWhisper %s autostart-cli: %s", kVersion, enable ? L"on" : L"off");
         const bool ok = SetAutoStartEnabled(enable);
         const AutoStartStatus status = GetAutoStartStatus();
         const bool live = status.registered && status.approved;
@@ -1253,7 +1324,7 @@ BOOL CWinWhisperApp::InitInstance()
     settings.Load();
     util::SetLogEnabled(settings.debugLog);
     const bool launchedAtLogon = cmdLine != nullptr && ::wcsstr(cmdLine, L"--autostart") != nullptr;
-    util::Log(L"WinWhisper 1.1.2 start%s", launchedAtLogon ? L" (автозапуск при входе)" : L"");
+    util::Log(L"WinWhisper %s start%s", kVersion, launchedAtLogon ? L" (автозапуск при входе)" : L"");
     util::InstallCrashHandler();
 
     // The registry decides what Windows runs; the INI field only mirrors it, so

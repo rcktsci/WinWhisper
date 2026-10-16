@@ -4,7 +4,6 @@
 
 struct InsertOptions {
     bool appendSpace = true;
-    bool newlineAsShiftEnter = true;
     bool clipboardFallback = true;
 };
 
