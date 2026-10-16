@@ -8,7 +8,7 @@
 #include <vector>
 
 struct TranscriptRequest {
-    CStringW baseUrl;              // e.g. https://api.neuraldeep.ru/v1
+    CStringW baseUrl;              // e.g. https://api.openai.com/v1
     CStringW apiKey;               // may be empty for servers that need none
     std::vector<uint8_t> wav;      // payload: RIFF/WAVE or M4A/AAC, see fileName
     CStringW fileName = L"audio.wav";
