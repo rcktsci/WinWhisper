@@ -42,6 +42,7 @@ constexpr UINT WM_TOGGLE_SETTINGS = WM_APP + 3;
 constexpr UINT ID_TRAY_LISTEN = 40001;
 constexpr UINT ID_TRAY_SETTINGS = 40002;
 constexpr UINT ID_TRAY_EXIT = 40003;
+constexpr UINT ID_TRAY_AUTOSTART = 40004;
 constexpr int HOTKEY_ID = 1;
 constexpr UINT_PTR TIMER_UI = 1;
 
@@ -150,6 +151,7 @@ private:
     void HandleCommand(UINT id);
     bool RegisterHotkey(const CStringW& spec, CStringW& error);
     void ArmHook(bool armed);
+    void ToggleAutoStart();
     void OpenSettings();
     void Poll();
     void DeliverReadyText();
@@ -574,11 +576,64 @@ void CHostWindow::HandleCommand(UINT id)
         StopDictation(L"настройки");
         OpenSettings();
         break;
+    case ID_TRAY_AUTOSTART:
+        ToggleAutoStart();
+        break;
     case ID_TRAY_EXIT:
         DestroyWindow();
         break;
     default:
         break;
+    }
+}
+
+// The label states what the registry says, because a tick alone would lie for the
+// two half-enabled cases: an entry switched off in Task Manager, and one left
+// behind by a copy in another folder.
+CStringW AutoStartMenuLabel(const AutoStartStatus& status)
+{
+    const bool on = status.registered && status.approved;
+    if (on && status.pointsHere)
+        return L"Автозапуск при входе: включён";
+    if (on)
+        return L"Автозапуск при входе: включён для другой копии";
+    if (status.registered)
+        return L"Автозапуск при входе: выключен в Диспетчере задач";
+    return L"Автозапуск при входе: выключен";
+}
+
+void CHostWindow::ToggleAutoStart()
+{
+    const AutoStartStatus before = GetAutoStartStatus();
+    // Only a fully working entry is switched off. Anything else (missing, blocked
+    // by Task Manager, pointing at another copy) is repaired to "on, here", which
+    // is also how a stale path after moving the exe gets fixed.
+    const bool enable = !(before.registered && before.approved && before.pointsHere);
+
+    const bool ok = SetAutoStartEnabled(enable);
+    settings_.autoStart = enable;
+    settings_.Save();
+
+    const AutoStartStatus after = GetAutoStartStatus();
+    const bool live = after.registered && after.approved;
+    util::Log(L"[autostart] tray toggle: requested %s, registry now registered=%d approved=%d "
+              L"pointsHere=%d",
+              enable ? L"on" : L"off", after.registered ? 1 : 0, after.approved ? 1 : 0,
+              after.pointsHere ? 1 : 0);
+
+    if (!ok || enable != live) {
+        ShowTrayBalloon(L"WinWhisper — автозапуск",
+                        L"Не удалось изменить запись автозапуска.\r\n"
+                        L"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+        return;
+    }
+    if (after.registered) {
+        ShowTrayBalloon(L"WinWhisper — автозапуск",
+                        CStringW(L"Включён: приложение запускается при входе в Windows.\r\n") +
+                            after.command);
+    } else {
+        ShowTrayBalloon(L"WinWhisper — автозапуск",
+                        L"Выключен: приложение больше не запускается само.");
     }
 }
 
@@ -618,6 +673,10 @@ void CHostWindow::OnContextMenu(CWnd* parent, CPoint point)
                   listening ? L"Диктовка идёт…" : L"Начать диктовку");
     ::AppendMenuW(menu, MF_STRING, ID_TRAY_SETTINGS, L"Настройки…");
 
+    const AutoStartStatus autostart = GetAutoStartStatus();
+    ::AppendMenuW(menu, MF_STRING | (autostart.registered && autostart.approved ? MF_CHECKED : 0),
+                  ID_TRAY_AUTOSTART, AutoStartMenuLabel(autostart));
+
     if (hotkeyActive_) {
         CStringW caption = L"Горячая клавиша: " + settings_.hotkey;
         ::AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, caption.GetString());
@@ -641,6 +700,15 @@ void CHostWindow::OpenSettings()
         ::FindResourceW(resources, MAKEINTRESOURCEW(IDD_SETTINGS), RT_DIALOG);
     util::Log(L"[settings] resources=0x%p, RT_DIALOG(%u)=0x%p", static_cast<void*>(resources),
               static_cast<unsigned>(IDD_SETTINGS), static_cast<void*>(templateResource));
+
+    // The checkbox must show what Windows will really do at logon, not what the
+    // INI remembers: Task Manager can switch the entry off behind our back.
+    // Without this the dialog would silently resurrect a disabled entry.
+    const AutoStartStatus autostart = GetAutoStartStatus();
+    settings_.autoStart = autostart.registered && autostart.approved;
+    util::Log(L"[settings] автозапуск: registered=%d approved=%d pointsHere=%d cmd=%s",
+              autostart.registered ? 1 : 0, autostart.approved ? 1 : 0, autostart.pointsHere ? 1 : 0,
+              autostart.command.GetString());
 
     CSettingsDialog dialog(settings_, this);
     const INT_PTR result = dialog.DoModal();
@@ -960,6 +1028,23 @@ int RunSelfTest()
     emit(L"api key       : %s (%d chars)",
          settings.apiKey.IsEmpty() ? L"NOT SET" : L"decrypted", settings.apiKey.GetLength());
 
+    // --- start-up entry ------------------------------------------------------
+    // Read-only on purpose: a self test must not change what the machine does at
+    // the next logon. The write path is checked through --autostart=on|off.
+    {
+        const AutoStartStatus autostart = GetAutoStartStatus();
+        const bool live = autostart.registered && autostart.approved;
+        CStringW state = live ? L"включён" : L"выключен";
+        if (autostart.registered && !autostart.approved)
+            state = L"выключен в Диспетчере задач";
+        else if (live && !autostart.pointsHere)
+            state = L"включён для другой копии";
+        emit(L"autostart     : %s%s%s", state.GetString(),
+             autostart.command.IsEmpty() ? L"" : L" — ", autostart.command.GetString());
+        if (settings.autoStart != live)
+            emit(L"                (в INI записано %s)", settings.autoStart ? L"вкл" : L"выкл");
+    }
+
     // --- endpointing: 1 s tone, 1.2 s silence, 0.8 s tone, 1 s silence -------
     {
         const int rate = 16000;
@@ -1121,14 +1206,41 @@ BOOL CWinWhisperApp::InitInstance()
         ::ExitProcess(ok ? 0 : 1);
     }
 
+    // Windows launches the Run entry as: "C:\...\WinWhisper.exe" --autostart
+    // The bare switch means "start quietly at logon". The =on/=off forms drive
+    // exactly the code the tray toggle uses, which makes the feature scriptable -
+    // and testable without clicking a tray menu.
+    const wchar_t* const cmdLine = ::GetCommandLineW();
+    if (cmdLine != nullptr && ::wcsstr(cmdLine, L"--autostart=") != nullptr) {
+        const bool enable = ::wcsstr(cmdLine, L"--autostart=on") != nullptr;
+        util::SetLogEnabled(true);
+        util::Log(L"WinWhisper 1.1.2 autostart-cli: %s", enable ? L"on" : L"off");
+        const bool ok = SetAutoStartEnabled(enable);
+        const AutoStartStatus status = GetAutoStartStatus();
+        const bool live = status.registered && status.approved;
+        if (enable == live) {
+            ::wprintf(L"autostart: %s\r\ncommand  : %s\r\n", enable ? L"on" : L"off",
+                      status.command.GetString());
+        } else {
+            ::wprintf(L"autostart: FAILED (requested %s, registered=%d approved=%d)\r\n",
+                      enable ? L"on" : L"off", status.registered ? 1 : 0, status.approved ? 1 : 0);
+        }
+        // ExitProcess does not flush stdio: without this a redirected stdout is
+        // empty, which looks exactly like the command having done nothing.
+        ::fflush(stdout);
+        ::ExitProcess(ok && enable == live ? 0 : 1);
+    }
+
     // Only one copy may own the global hotkey.
     HWND existing = ::FindWindowW(L"WinWhisperHiddenHost", nullptr);
     if (existing != nullptr) {
         // A second launch just pokes the running copy. WM_COMMAND cannot cross a
         // process boundary for messages below WM_USER, so the request travels as
         // a WM_APP message instead.
-        if (::wcsstr(::GetCommandLineW(), L"--settings") != nullptr)
+        if (cmdLine != nullptr && ::wcsstr(cmdLine, L"--settings") != nullptr)
             ::PostMessageW(existing, WM_TOGGLE_SETTINGS, 0, 0);
+        else if (cmdLine != nullptr && ::wcsstr(cmdLine, L"--autostart") != nullptr)
+            (void)0;   // already running: a logon launch has nothing left to do
         else
             ::PostMessageW(existing, WM_TOGGLE_DICTATION, 0, 0);
         return FALSE;
@@ -1140,8 +1252,21 @@ BOOL CWinWhisperApp::InitInstance()
     Settings settings;
     settings.Load();
     util::SetLogEnabled(settings.debugLog);
-    util::Log(L"WinWhisper 1.1.1 start");
+    const bool launchedAtLogon = cmdLine != nullptr && ::wcsstr(cmdLine, L"--autostart") != nullptr;
+    util::Log(L"WinWhisper 1.1.2 start%s", launchedAtLogon ? L" (автозапуск при входе)" : L"");
     util::InstallCrashHandler();
+
+    // The registry decides what Windows runs; the INI field only mirrors it, so
+    // the two cannot drift apart after a change made in Task Manager.
+    const AutoStartStatus autostart = GetAutoStartStatus();
+    util::Log(L"[autostart] registered=%d approved=%d pointsHere=%d cmd=%s",
+              autostart.registered ? 1 : 0, autostart.approved ? 1 : 0, autostart.pointsHere ? 1 : 0,
+              autostart.command.GetString());
+    const bool autostartLive = autostart.registered && autostart.approved;
+    if (settings.autoStart != autostartLive) {
+        settings.autoStart = autostartLive;
+        settings.Save();
+    }
 
     host->ApplyInitialSettings(settings);
 

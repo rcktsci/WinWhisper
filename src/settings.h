@@ -64,5 +64,17 @@ std::string ProtectSecret(const std::string& plain);
 std::string UnprotectSecret(const std::string& base64Blob);
 
 // --- start-up ---------------------------------------------------------------
-void SetAutoStartEnabled(bool enable);
+// The registry, not the INI, is what Windows actually reads at logon, so the
+// state is queried rather than assumed. Task Manager switches a startup entry
+// off without deleting it, and the INI knows nothing about a copy that was
+// registered from another folder, hence the three separate flags.
+struct AutoStartStatus {
+    bool registered = false;   // HKCU\...\Run\WinWhisper exists
+    bool approved = true;      // ...and Task Manager has not switched it off
+    bool pointsHere = false;   // ...and it runs this very executable
+    CStringW command;          // raw command line from the Run entry
+};
+
+AutoStartStatus GetAutoStartStatus();
+bool SetAutoStartEnabled(bool enable);
 bool IsAutoStartEnabled();

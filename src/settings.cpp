@@ -264,37 +264,195 @@ std::string UnprotectSecret(const std::string& base64Blob)
 }
 
 // ------------------------------------------------------------- autostart ----
+//
+// Two places in the registry describe a startup entry:
+//
+//   ...\CurrentVersion\Run\WinWhisper                       what logon runs
+//   ...\Explorer\StartupApproved\Run\WinWhisper             on/off from the UI
+//
+// Task Manager's "Startup apps" tab does not delete the first one when you
+// switch an app off: it writes a 12-byte blob into the second, whose first byte
+// is even when the entry is allowed and odd when it is blocked. An app that only
+// checks Run would keep claiming it starts with Windows while Windows quietly
+// skips it.
+const wchar_t* const kStartupApprovedKey =
+    L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
 
-void SetAutoStartEnabled(bool enable)
+const wchar_t* const kRunValueName = L"WinWhisper";
+
+CStringW CurrentExePath()
 {
-    HKEY key = nullptr;
-    if (::RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
-                          nullptr) != ERROR_SUCCESS) {
-        return;
-    }
-    if (enable) {
-        WCHAR exe[MAX_PATH] = {};
-        if (::GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe)) > 0) {
-            CStringW cmd;
-            cmd.Format(L"\"%s\" --autostart", exe);
-            ::RegSetValueExW(key, L"WinWhisper", 0, REG_SZ,
-                             reinterpret_cast<const BYTE*>(cmd.GetString()),
-                             static_cast<DWORD>((cmd.GetLength() + 1) * sizeof(wchar_t)));
-        }
-    } else {
-        ::RegDeleteValueW(key, L"WinWhisper");
-    }
-    ::RegCloseKey(key);
+    // MAX_PATH is not enough on machines with long paths enabled.
+    std::vector<wchar_t> buffer(32768);
+    const DWORD len = ::GetModuleFileNameW(nullptr, buffer.data(),
+                                           static_cast<DWORD>(buffer.size()));
+    if (len == 0 || len >= buffer.size())
+        return CStringW();
+    return CStringW(buffer.data(), static_cast<int>(len));
 }
 
-bool IsAutoStartEnabled()
+// Resolves an 8.3 short name to the real one and expands any relative parts, so
+// "C:\PROGRA~1\WinWhisper\WinWhisper.exe" still compares equal to the full path
+// of the running copy.
+CStringW NormalizePath(const CStringW& path)
+{
+    if (path.IsEmpty())
+        return path;
+    WCHAR full[32768] = {};
+    if (::GetFullPathNameW(path.GetString(), ARRAYSIZE(full), full, nullptr) == 0)
+        return path;
+    WCHAR longName[32768] = {};
+    if (::GetLongPathNameW(full, longName, ARRAYSIZE(longName)) > 0)
+        return CStringW(longName);
+    return CStringW(full);
+}
+
+// The Run value is a command line ("C:\path\WinWhisper.exe" --autostart), so the
+// executable is the first token, quoted or not.
+CStringW ExecutableFromCommand(const CStringW& command)
+{
+    CStringW text = command;
+    text.Trim();
+    if (text.IsEmpty())
+        return text;
+    if (text[0] == L'"') {
+        const int closing = text.Find(L'"', 1);
+        if (closing > 1)
+            return text.Mid(1, closing - 1);
+        return text.Mid(1);
+    }
+    const int space = text.Find(L' ');
+    return space > 0 ? text.Left(space) : text;
+}
+
+bool ReadRunCommand(CStringW* command)
 {
     HKEY key = nullptr;
     if (::RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
         return false;
-    bool present = ::RegQueryValueExW(key, L"WinWhisper", nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS;
+
+    DWORD type = 0;
+    DWORD bytes = 0;
+    bool found = false;
+    if (::RegQueryValueExW(key, kRunValueName, nullptr, &type, nullptr, &bytes) == ERROR_SUCCESS &&
+        (type == REG_SZ || type == REG_EXPAND_SZ) && bytes >= sizeof(wchar_t) &&
+        bytes <= 64 * 1024) {
+        std::vector<wchar_t> buffer(bytes / sizeof(wchar_t) + 1, L'\0');
+        if (::RegQueryValueExW(key, kRunValueName, nullptr, &type,
+                               reinterpret_cast<BYTE*>(buffer.data()), &bytes) == ERROR_SUCCESS) {
+            *command = CStringW(buffer.data());
+            found = true;
+        }
+    }
     ::RegCloseKey(key);
-    return present;
+    return found;
+}
+
+// No StartupApproved value at all means "never touched by the user": allowed.
+bool ReadStartupApproved()
+{
+    HKEY key = nullptr;
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, kStartupApprovedKey, 0, KEY_QUERY_VALUE, &key) !=
+        ERROR_SUCCESS)
+        return true;
+
+    BYTE data[64] = {};
+    DWORD bytes = sizeof(data);
+    DWORD type = 0;
+    const LONG status = ::RegQueryValueExW(key, kRunValueName, nullptr, &type, data, &bytes);
+    ::RegCloseKey(key);
+    if (status != ERROR_SUCCESS || bytes < 1 || type != REG_BINARY)
+        return true;
+    // 0x02 = enabled, 0x03 = disabled (and 0x06/0x07 for entries created by the
+    // Start menu) - the low bit carries the state.
+    return (data[0] & 0x01) == 0;
+}
+
+// Lets Windows run the entry again after Task Manager switched it off.
+void ClearStartupApprovedBlock()
+{
+    HKEY key = nullptr;
+    if (::RegCreateKeyExW(HKEY_CURRENT_USER, kStartupApprovedKey, 0, nullptr, 0, KEY_SET_VALUE,
+                          nullptr, &key, nullptr) != ERROR_SUCCESS)
+        return;
+    // The layout Windows itself writes: state byte plus the timestamp of the
+    // change. 0x02, then a zeroed FILETIME.
+    BYTE enabled[12] = {};
+    enabled[0] = 0x02;
+    ::RegSetValueExW(key, kRunValueName, 0, REG_BINARY, enabled, sizeof(enabled));
+    ::RegCloseKey(key);
+}
+
+AutoStartStatus GetAutoStartStatus()
+{
+    AutoStartStatus status;
+    status.registered = ReadRunCommand(&status.command);
+    if (!status.registered)
+        return status;
+
+    status.approved = ReadStartupApproved();
+    const CStringW registeredExe = NormalizePath(ExecutableFromCommand(status.command));
+    const CStringW runningExe = NormalizePath(CurrentExePath());
+    status.pointsHere = !registeredExe.IsEmpty() && !runningExe.IsEmpty() &&
+                        ::CompareStringOrdinal(registeredExe.GetString(), -1,
+                                               runningExe.GetString(), -1, TRUE) == CSTR_EQUAL;
+    return status;
+}
+
+bool SetAutoStartEnabled(bool enable)
+{
+    HKEY key = nullptr;
+    if (::RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key,
+                          nullptr) != ERROR_SUCCESS) {
+        util::Log(L"[autostart] RegCreateKeyEx(Run) failed, err=%lu", ::GetLastError());
+        return false;
+    }
+
+    bool ok = true;
+    if (enable) {
+        const CStringW exe = CurrentExePath();
+        if (exe.IsEmpty()) {
+            ok = false;
+        } else {
+            // Quoted: the path may contain spaces, and without the quotes Windows
+            // would try to run "C:\Program".
+            CStringW cmd;
+            cmd.Format(L"\"%s\" --autostart", exe.GetString());
+            ok = ::RegSetValueExW(key, kRunValueName, 0, REG_SZ,
+                                  reinterpret_cast<const BYTE*>(cmd.GetString()),
+                                  static_cast<DWORD>((cmd.GetLength() + 1) * sizeof(wchar_t))) ==
+                 ERROR_SUCCESS;
+        }
+    } else {
+        const LONG status = ::RegDeleteValueW(key, kRunValueName);
+        ok = status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND;
+    }
+    ::RegCloseKey(key);
+
+    if (ok && enable) {
+        // Only when the entry really is blocked. Writing this key on every enable
+        // would be pointless - and it is not what an ordinary application touches,
+        // which is exactly the kind of thing Defender's behaviour model flags
+        // (a copy in %TEMP% was once quarantined as Behavior:Win32/Persistence.A!ml
+        // for writing the Run key; the same build writing it from its install
+        // folder was never touched).
+        if (!ReadStartupApproved())
+            ClearStartupApprovedBlock();
+    }
+    // Switching the entry off leaves any StartupApproved blob behind: it is inert
+    // while the Run value is gone, and enabling again rewrites it if it blocks.
+
+    const AutoStartStatus after = GetAutoStartStatus();
+    util::Log(L"[autostart] %s -> %s (registered=%d approved=%d pointsHere=%d cmd=%s)",
+              enable ? L"on" : L"off", ok ? L"ok" : L"failed", after.registered ? 1 : 0,
+              after.approved ? 1 : 0, after.pointsHere ? 1 : 0, after.command.GetString());
+    return ok;
+}
+
+bool IsAutoStartEnabled()
+{
+    const AutoStartStatus status = GetAutoStartStatus();
+    return status.registered && status.approved;
 }
 
 // --------------------------------------------------------------- hotkey -----
