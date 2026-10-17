@@ -6,6 +6,10 @@
 Нативная утилита в трее: один exe на 2.8 МБ, статический MFC, ни зависимостей, ни установщика.
 Распознавание — любой **OpenAI-совместимый** Whisper (облако или свой локальный сервер).
 
+> **In English.** WinWhisper is a tray app for Windows 10/11: press the hotkey, speak, and the text lands in whatever field has focus — browser, editor, terminal, messenger. Recognition goes through any OpenAI-compatible Whisper endpoint. One 2.8 MB exe, static MFC, no installer, no dependencies.
+>
+> Install: download `WinWhisper.exe` from [Releases](https://github.com/rcktsci/WinWhisper/releases/latest) and run it, or `winget install rcktsci.WinWhisper`. The UI and docs are in Russian; speech recognition works in any language.
+
 [![build](https://github.com/rcktsci/WinWhisper/actions/workflows/build.yml/badge.svg)](https://github.com/rcktsci/WinWhisper/actions/workflows/build.yml)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![toolset](https://img.shields.io/badge/MSVC%202022%2F2026-C%2B%2B17-5C2D91)
@@ -16,6 +20,24 @@
 </p>
 
 ---
+
+## 📥 Установка
+
+Два пути — файл в обоих случаях один и тот же, поведение одинаковое.
+
+**1. Просто запустить.** Скачать `WinWhisper.exe` из [последнего релиза](https://github.com/rcktsci/WinWhisper/releases/latest) и запустить. Установщика нет, в системе ничего не регистрируется, все данные — в `%APPDATA%\WinWhisper`.
+
+**2. Через winget.**
+
+```powershell
+winget install rcktsci.WinWhisper
+```
+
+Пакет типа `portable`: exe кладётся в `%LOCALAPPDATA%\Microsoft\WinGet\Packages\rcktsci.WinWhisper_…`, в Параметрах → Приложения появляется запись с кнопкой «Удалить», а в PATH — команда `WinWhisper`. Сразу после установки её видит новый терминал; Проводнику может понадобиться перезапуск, если запускать хочется через `Win+R`.
+
+> Пакет ещё проходит ревью в winget. Если команда пока не находит пакет — качайте exe, он идентичен.
+
+**Автозапуск** включается после первого запуска: правый клик по иконке в трее. Ни установщика, ни прав администратора для этого не нужно.
 
 ## ✨ Возможности
 
@@ -283,4 +305,4 @@ WinWhisper.exe --autostart=off
 
 ## 📄 Лицензия
 
-Лицензия пока не выбрана — по умолчанию все права reserved. Скажите, если нужна MIT/Apache-2.0.
+MIT — делайте что хотите, только сохраните текст лицензии и не ждите гарантий. Полный текст в [LICENSE](LICENSE).
