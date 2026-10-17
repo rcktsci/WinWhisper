@@ -48,7 +48,7 @@ constexpr UINT_PTR TIMER_UI = 1;
 
 // The version in one place for the log; the resource script and the manifest
 // carry the same number for the file properties Windows shows.
-constexpr wchar_t kVersion[] = L"1.1.8";
+constexpr wchar_t kVersion[] = L"1.1.9";
 
 // How long an error stays on screen before the panel disappears again.
 constexpr int kErrorTicks = 90;  // ~3 s at 33 ms
@@ -927,6 +927,12 @@ int RunSettingsShot(const CStringW& path, bool neutral)
     } else {
         settings.Load();
     }
+
+    // Render at 100% whatever this machine's display scaling is. The dialog is
+    // laid out in dialog units, so a 125% desktop would otherwise produce an
+    // image 25% larger than the dialog really is - and the README has no business
+    // showing an enlarged screenshot.
+    ::SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE);
 
     CSettingsDialog dialog(settings, nullptr);
     if (!dialog.Create(IDD_SETTINGS, nullptr)) {
