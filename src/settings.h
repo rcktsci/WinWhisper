@@ -42,6 +42,14 @@ struct Settings {
     bool autoStart = false;
     bool debugLog = false;
 
+    // --- Panel position ----------------------------------------------------
+    // Where the user left the panel, so it opens in the same place next time
+    // instead of covering the field being typed into. Absolute screen
+    // coordinates; panelPlaced stays false until the panel has been shown once.
+    bool panelPlaced = false;
+    int panelX = 0;
+    int panelY = 0;
+
     // --- HTTP timeouts -----------------------------------------------------
     int connectTimeoutMs = 10000;
     int receiveTimeoutMs = 120000;

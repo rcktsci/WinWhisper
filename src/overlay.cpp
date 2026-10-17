@@ -279,8 +279,50 @@ void OverlayWindow::ApplyRegion()
     ::SetWindowRgn(GetSafeHwnd(), region, TRUE);  // window owns it after this call
 }
 
+void OverlayWindow::SetStickyPosition(bool placed, int x, int y)
+{
+    stickyPlaced_ = placed;
+    stickyX_ = x;
+    stickyY_ = y;
+}
+
+RECT OverlayWindow::PreviewRect()
+{
+    // The size matters for the clamp, and BuildMetrics is what produces it; there
+    // is no window here, so it falls back to 96 dpi.
+    BuildMetrics();
+    return ScreenRect();
+}
+
+// The panel is kept inside the work area of the monitor nearest to the spot it
+// was left on: a remembered position can otherwise end up on a monitor that was
+// unplugged, or under the taskbar after a resolution change. A spot that is still
+// valid is used exactly as it is - including a second monitor, because that is
+// where the user put it.
+RECT OverlayWindow::ClampIntoWorkArea(int x, int y) const
+{
+    const HMONITOR monitor = ::MonitorFromPoint(POINT{x, y}, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    if (::GetMonitorInfoW(monitor, &mi)) {
+        // Explicit ints: RECT members are LONG, and std::min/max refuses to mix
+        // them with int in a template argument.
+        const int left = static_cast<int>(mi.rcWork.left);
+        const int top = static_cast<int>(mi.rcWork.top);
+        const int right = static_cast<int>(mi.rcWork.right);
+        const int bottom = static_cast<int>(mi.rcWork.bottom);
+        x = std::max(left, std::min(x, right - metrics_.width));
+        y = std::max(top, std::min(y, bottom - metrics_.height));
+    }
+    RECT r = {x, y, x + metrics_.width, y + metrics_.height};
+    return r;
+}
+
 RECT OverlayWindow::ScreenRect() const
 {
+    if (stickyPlaced_)
+        return ClampIntoWorkArea(stickyX_, stickyY_);
+
     // Anchor to the caret so the panel appears where the user is typing, the
     // same place the built-in typist puts it.
     HWND target = ::GetForegroundWindow();
@@ -348,6 +390,16 @@ void OverlayWindow::ShowNear(HWND target)
     const RECT rect = ScreenRect();
     ::SetWindowPos(GetSafeHwnd(), HWND_TOPMOST, rect.left, rect.top, metrics_.width,
                    metrics_.height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+    // The first placement is the one next to the caret; from now on that is the
+    // panel's home, reported to the owner so it survives a restart.
+    if (!stickyPlaced_) {
+        stickyPlaced_ = true;
+        stickyX_ = rect.left;
+        stickyY_ = rect.top;
+        if (onMoved)
+            onMoved(stickyX_, stickyY_);
+    }
     Invalidate();
 }
 
@@ -426,6 +478,15 @@ void OverlayWindow::OnLButtonUp(UINT flags, CPoint point)
     if (dragging_) {
         dragging_ = false;
         ::ReleaseCapture();
+        // The user just said where the panel belongs: remember it for every later
+        // dictation instead of going back to the caret.
+        RECT rect = {};
+        ::GetWindowRect(GetSafeHwnd(), &rect);
+        stickyPlaced_ = true;
+        stickyX_ = rect.left;
+        stickyY_ = rect.top;
+        if (onMoved)
+            onMoved(stickyX_, stickyY_);
         return;
     }
     ::ReleaseCapture();

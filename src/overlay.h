@@ -40,9 +40,20 @@ public:
     // Panel dimensions at the given scale, needed to size an off-screen bitmap.
     CSize PanelSizeForDpi(int dpi);
 
+    // The panel comes back where the user left it instead of following the caret:
+    // flying to the caret means landing on the field being typed into. The very
+    // first time there is nothing to remember yet, so it opens next to the caret
+    // once and stays there from then on.
+    void SetStickyPosition(bool placed, int x, int y);
+
+    // Where the panel would appear right now. The self test uses it to check the
+    // remembered position without putting anything on screen.
+    RECT PreviewRect();
+
     std::function<void()> onClose;
     std::function<void()> onSettings;
     std::function<void()> onHelp;
+    std::function<void(int x, int y)> onMoved;   // placed for the first time, or dragged
 
 protected:
     afx_msg void OnPaint();
@@ -76,6 +87,7 @@ private:
     void BuildMetrics(int dpiOverride = 0);
     void ApplyRegion();
     RECT ScreenRect() const;
+    RECT ClampIntoWorkArea(int x, int y) const;
     void BuildFonts();
     void DrawBackground(CDC& dc);
     void DrawMic(CDC& dc);
@@ -95,6 +107,9 @@ private:
     bool dragging_ = false;
     int dragOffsetX_ = 0;
     int dragOffsetY_ = 0;
+    bool stickyPlaced_ = false;   // a remembered spot exists
+    int stickyX_ = 0;
+    int stickyY_ = 0;
 };
 
 namespace overlay {

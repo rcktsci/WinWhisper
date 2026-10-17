@@ -14,6 +14,7 @@ constexpr wchar_t kSecServer[] = L"server";
 constexpr wchar_t kSecVad[] = L"vad";
 constexpr wchar_t kSecInput[] = L"input";
 constexpr wchar_t kSecApp[] = L"app";
+constexpr wchar_t kSecPanel[] = L"panel";
 
 const wchar_t* const kRunKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
@@ -179,6 +180,10 @@ void Settings::Load()
     autoStart = GetBool(kSecApp, L"auto_start", autoStart, file);
     debugLog = GetBool(kSecApp, L"debug_log", debugLog, file);
 
+    panelPlaced = GetBool(kSecPanel, L"placed", panelPlaced, file);
+    panelX = util::ParseInt(GetStr(kSecPanel, L"x", L"", file), panelX);
+    panelY = util::ParseInt(GetStr(kSecPanel, L"y", L"", file), panelY);
+
     ClampToSaneRanges();
 }
 
@@ -221,6 +226,10 @@ void Settings::Save() const
 
     PutBool(kSecApp, L"auto_start", autoStart, file);
     PutBool(kSecApp, L"debug_log", debugLog, file);
+
+    PutBool(kSecPanel, L"placed", panelPlaced, file);
+    PutNum(kSecPanel, L"x", panelX, L"%.0f", file);
+    PutNum(kSecPanel, L"y", panelY, L"%.0f", file);
 }
 
 // ----------------------------------------------------------------- DPAPI ----

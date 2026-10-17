@@ -48,7 +48,7 @@ constexpr UINT_PTR TIMER_UI = 1;
 
 // The version in one place for the log; the resource script and the manifest
 // carry the same number for the file properties Windows shows.
-constexpr wchar_t kVersion[] = L"1.1.6";
+constexpr wchar_t kVersion[] = L"1.1.7";
 
 // How long an error stays on screen before the panel disappears again.
 constexpr int kErrorTicks = 90;  // ~3 s at 33 ms
@@ -122,7 +122,12 @@ LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam)
 
 class CHostWindow : public CWnd {
 public:
-    void ApplyInitialSettings(const Settings& settings) { settings_ = settings; }
+    void ApplyInitialSettings(const Settings& settings)
+    {
+        settings_ = settings;
+        // Restore the panel's home before it is created for the first time.
+        overlay_.SetStickyPosition(settings_.panelPlaced, settings_.panelX, settings_.panelY);
+    }
     bool CreateAndInit();
     void StartDictation();
     void StopDictation(const wchar_t* reason);
@@ -219,6 +224,18 @@ bool CHostWindow::CreateAndInit()
                         L"Горячая клавиша начинает и останавливает диктовку.\r\n"
                         L"ESC — остановить и вставить распознанное.\r\n"
                         L"Текст вставляется в окно, где стоял курсор.");
+    };
+    overlay_.onMoved = [this](int x, int y) {
+        // The panel reports where it landed: the first time it ever appears and
+        // every time it is dragged. Remembered so the next dictation does not fly
+        // back to the caret and cover the field.
+        if (settings_.panelPlaced && settings_.panelX == x && settings_.panelY == y)
+            return;
+        settings_.panelPlaced = true;
+        settings_.panelX = x;
+        settings_.panelY = y;
+        settings_.Save();
+        util::Log(L"[panel] положение запомнено: %d,%d", x, y);
     };
 
     AddTrayIcon();
@@ -1175,6 +1192,40 @@ int RunSelfTest()
             emit(L"                (в INI записано %s)", settings.autoStart ? L"вкл" : L"выкл");
     }
 
+    // --- panel position ------------------------------------------------------
+    // The panel must come back exactly where it was left, and a spot that no
+    // longer exists (monitor unplugged, resolution changed) must not hide it.
+    // Checked through the same code that places it on screen, without showing
+    // anything.
+    {
+        OverlayWindow preview;
+        const CSize size = preview.PanelSizeForDpi(96);
+        CStringW saved = L"ещё не запоминалось";
+        if (settings.panelPlaced)
+            saved.Format(L"%d,%d", settings.panelX, settings.panelY);
+        emit(L"panel         : в INI %s", saved.GetString());
+
+        preview.SetStickyPosition(true, 100, 200);
+        const RECT exact = preview.PreviewRect();
+        const bool honoured = exact.left == 100 && exact.top == 200;
+        emit(L"panel         : сохранённое 100,200 -> %ld,%ld %s", exact.left, exact.top,
+             honoured ? L"OK" : L"FAIL");
+        if (!honoured)
+            ++failures;
+
+        preview.SetStickyPosition(true, 50000, 50000);
+        const RECT clamped = preview.PreviewRect();
+        const int vx = ::GetSystemMetrics(SM_XVIRTUALSCREEN);
+        const int vy = ::GetSystemMetrics(SM_YVIRTUALSCREEN);
+        const bool inside = clamped.left >= vx && clamped.top >= vy &&
+                            clamped.right <= vx + ::GetSystemMetrics(SM_CXVIRTUALSCREEN) &&
+                            clamped.bottom <= vy + ::GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        emit(L"panel         : потерянное 50000,50000 -> %ld,%ld, размер %dx%d — %s", clamped.left,
+             clamped.top, size.cx, size.cy, inside ? L"осталось на экране" : L"FAIL");
+        if (!inside)
+            ++failures;
+    }
+
     // --- endpointing: 1 s tone, 1.2 s silence, 0.8 s tone, 1 s silence -------
     {
         const int rate = 16000;
@@ -1322,11 +1373,19 @@ BOOL CWinWhisperApp::InitInstance()
     // without opening the panel on somebody's desktop.
     if (const wchar_t* shot = ::wcsstr(::GetCommandLineW(), L"--panel-shot")) {
         const CStringW path = PathAfterSwitch(shot + 12);
-        const int dpi = (::wcsstr(::GetCommandLineW(), L"--dpi=144") != nullptr) ? 144 : 96;
+        util::SetLogEnabled(true);
+        // Any scale, not just one hard-coded value: the README wants a true 2x
+        // asset (192 dpi) next to the 1x one.
+        int dpi = 96;
+        if (const wchar_t* dpiSwitch = ::wcsstr(::GetCommandLineW(), L"--dpi=")) {
+            dpi = util::ParseInt(CStringW(dpiSwitch + 6), 96);
+            if (dpi < 72 || dpi > 384)
+                dpi = 96;
+        }
         CStringW error;
         const bool ok = overlay::RenderPanelToPng(path, dpi, &error);
-        util::Log(L"[panel-shot] %s -> %s %s", ok ? L"ok" : L"failed", path.GetString(),
-                  error.GetString());
+        util::Log(L"[panel-shot] %s -> %s при %d dpi %s", ok ? L"ok" : L"failed", path.GetString(),
+                  dpi, error.GetString());
         ::ExitProcess(ok ? 0 : 1);
     }
 
@@ -1361,6 +1420,47 @@ BOOL CWinWhisperApp::InitInstance()
         // empty, which looks exactly like the command having done nothing.
         ::fflush(stdout);
         ::ExitProcess(ok && enable == live ? 0 : 1);
+    }
+
+    // Sets or clears the remembered panel position: "300,400" pins it, "reset"
+    // goes back to opening next to the caret. Also the only way to check the write
+    // path without dragging a window with the mouse.
+    if (cmdLine != nullptr && ::wcsstr(cmdLine, L"--panel-place") != nullptr) {
+        util::SetLogEnabled(true);
+        Settings settings;
+        settings.Load();
+        const wchar_t* valueStart = ::wcsstr(cmdLine, L"--panel-place") + 13;
+        if (valueStart[0] == L'=')
+            ++valueStart;
+        const CStringW value = PathAfterSwitch(valueStart);
+        bool ok = true;
+        if (value.CompareNoCase(L"reset") == 0) {
+            settings.panelPlaced = false;
+            util::Log(L"[panel] положение сброшено по --panel-place=reset");
+        } else {
+            const int comma = value.Find(L',');
+            const int x = comma > 0 ? util::ParseInt(value.Left(comma), -999999) : -999999;
+            const int y = comma > 0 ? util::ParseInt(value.Mid(comma + 1), -999999) : -999999;
+            if (x == -999999 || y == -999999) {
+                ok = false;
+            } else {
+                settings.panelPlaced = true;
+                settings.panelX = x;
+                settings.panelY = y;
+                util::Log(L"[panel] положение задано вручную: %d,%d", x, y);
+            }
+        }
+        if (ok) {
+            settings.Save();
+            ::wprintf(L"panel: %s %d,%d\r\n", settings.panelPlaced ? L"placed" : L"reset",
+                      settings.panelX, settings.panelY);
+        } else {
+            // ASCII on purpose: a redirected stdout is a byte stream, so a
+            // Cyrillic message would arrive as mojibake.
+            ::wprintf(L"panel: FAILED (usage: --panel-place=X,Y or --panel-place=reset)\r\n");
+        }
+        ::fflush(stdout);
+        ::ExitProcess(ok ? 0 : 2);
     }
 
     // Only one copy may own the global hotkey.
@@ -1412,6 +1512,9 @@ BOOL CWinWhisperApp::InitInstance()
         settings.autoStart = autostartLive;
         settings.Save();
     }
+
+    util::Log(L"[panel] запомненное положение: placed=%d %d,%d", settings.panelPlaced ? 1 : 0,
+              settings.panelX, settings.panelY);
 
     host->ApplyInitialSettings(settings);
 
