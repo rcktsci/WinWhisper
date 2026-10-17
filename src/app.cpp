@@ -48,7 +48,7 @@ constexpr UINT_PTR TIMER_UI = 1;
 
 // The version in one place for the log; the resource script and the manifest
 // carry the same number for the file properties Windows shows.
-constexpr wchar_t kVersion[] = L"1.1.5";
+constexpr wchar_t kVersion[] = L"1.1.6";
 
 // How long an error stays on screen before the panel disappears again.
 constexpr int kErrorTicks = 90;  // ~3 s at 33 ms
@@ -893,12 +893,23 @@ CStringW PathAfterSwitch(const wchar_t* value)
 // Renders the settings dialog into a PNG without putting it on the desktop.
 // Dialog layout is easy to get wrong and looking at the result is the only
 // honest check, so this mirrors --panel-shot for the panel.
-int RunSettingsShot(const CStringW& path)
+// `neutral` fills the dialog with example values instead of reading the INI: a
+// screenshot for the README must not publish somebody's gateway address or key.
+int RunSettingsShot(const CStringW& path, bool neutral)
 {
     util::SetLogEnabled(true);
 
     Settings settings;
-    settings.Load();
+    if (neutral) {
+        settings.baseUrl = L"https://api.openai.com/v1";
+        settings.apiKey = L"sk-demo";
+        settings.model = L"whisper-1";
+        settings.prompt = L"Русский текст, обычная пунктуация, короткие предложения.";
+        settings.glossary = L"Grafana, Prometheus, Kubernetes";
+        settings.autoStart = true;
+    } else {
+        settings.Load();
+    }
 
     CSettingsDialog dialog(settings, nullptr);
     if (!dialog.Create(IDD_SETTINGS, nullptr)) {
@@ -936,8 +947,12 @@ int RunSettingsShot(const CStringW& path)
     CStringW error;
     const bool ok = overlay::SaveBitmapToPng(static_cast<HBITMAP>(bitmap.GetSafeHandle()), path,
                                              &error);
-    util::Log(L"[settings-shot] %s -> %s %dx%d %s", ok ? L"ok" : L"failed", path.GetString(), width,
-              height, error.GetString());
+    // The DPI belongs in the log: the same dialog template comes out a different
+    // size on a different monitor scale, and that is the first thing to check
+    // when a screenshot does not match an earlier one.
+    util::Log(L"[settings-shot] %s -> %s %dx%d при %u dpi%s%s", ok ? L"ok" : L"failed",
+              path.GetString(), width, height, ::GetDpiForWindow(dialog.GetSafeHwnd()),
+              neutral ? L" (нейтральные значения)" : L"", error.GetString());
 
     bitmap.DeleteObject();
     mem.DeleteDC();
@@ -1319,7 +1334,8 @@ BOOL CWinWhisperApp::InitInstance()
     // somebody's screen, and the PNG can be shown to whoever asked for the change.
     if (const wchar_t* shot = ::wcsstr(::GetCommandLineW(), L"--settings-shot")) {
         const CStringW path = PathAfterSwitch(shot + 15);
-        ::ExitProcess(static_cast<UINT>(RunSettingsShot(path)));
+        const bool neutral = ::wcsstr(::GetCommandLineW(), L"--neutral") != nullptr;
+        ::ExitProcess(static_cast<UINT>(RunSettingsShot(path, neutral)));
     }
 
     // Windows launches the Run entry as: "C:\...\WinWhisper.exe" --autostart
