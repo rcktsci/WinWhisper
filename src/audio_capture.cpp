@@ -326,6 +326,12 @@ bool AudioCapture::CaptureFrom(IMMDevice* device, const CStringW& name)
     bool gotAudio = false;
     bool deviceInvalid = false;
     size_t framesReceived = 0;
+    // Counters instead of a log line per packet: some USB microphones set the
+    // discontinuity flag on a large share of packets, and logging each one wrote
+    // about a megabyte a day into the log while saying nothing new.
+    size_t packets = 0;
+    size_t gapPackets = 0;
+    size_t silentPackets = 0;
 
     while (!stopRequested_.load()) {
         hr = capture->GetNextPacketSize(&available);
@@ -358,6 +364,11 @@ bool AudioCapture::CaptureFrom(IMMDevice* device, const CStringW& name)
         }
 
         if (data != nullptr && available > 0) {
+            ++packets;
+            if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0)
+                ++gapPackets;
+            if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0)
+                ++silentPackets;
             mono_.resize(available);
             ConvertToMono(data, available, mono_.data());
             if (onAudio_)
@@ -368,14 +379,6 @@ bool AudioCapture::CaptureFrom(IMMDevice* device, const CStringW& name)
         }
 
         capture->ReleaseBuffer(available);
-
-        // GetBuffer's flags are AUDCLNT_BUFFERFLAGS_*: 0x1 is a stream
-        // discontinuity (normal at start-up), 0x2 means the buffer holds
-        // silence, 0x4 a timestamp problem. None of them says the device died -
-        // that arrives as AUDCLNT_E_DEVICE_INVALIDATED above - so they are noted
-        // and otherwise ignored.
-        if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY)
-            util::Log(L"[audio] buffer discontinuity on '%s'", name.GetString());
     }
 
     running_.store(false);
@@ -386,8 +389,14 @@ bool AudioCapture::CaptureFrom(IMMDevice* device, const CStringW& name)
         ::CoTaskMemFree(const_cast<WAVEFORMATEX*>(mixFormat_));
         mixFormat_ = nullptr;
     }
-    util::Log(L"[audio] capture stopped on '%s' (audio=%d, invalid=%d)", name.GetString(),
-              gotAudio ? 1 : 0, deviceInvalid ? 1 : 0);
+    // GetBuffer's flags are AUDCLNT_BUFFERFLAGS_*: a gap in the stream, silence,
+    // or a timestamp problem. None of them means the device died - that arrives
+    // as AUDCLNT_E_DEVICE_INVALIDATED above - so they only get summarised here.
+    util::Log(L"[audio] capture stopped on '%s' (audio=%d, invalid=%d, packets=%d, gaps=%d, "
+              L"silent=%d, %.1f s)",
+              name.GetString(), gotAudio ? 1 : 0, deviceInvalid ? 1 : 0, static_cast<int>(packets),
+              static_cast<int>(gapPackets), static_cast<int>(silentPackets),
+              sampleRate_ > 0 ? framesReceived / sampleRate_ : 0.0);
 
     if (gotAudio)
         return true;

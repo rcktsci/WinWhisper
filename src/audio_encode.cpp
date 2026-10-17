@@ -60,6 +60,16 @@ CStringW TempFilePath()
     return path;
 }
 
+// The sink writer can only encode into a file, so M4A output passes through
+// %TEMP% for a few milliseconds. This removes it on every exit path - including
+// the early failures - and cleans up after a killed process by deleting the file
+// as soon as the guard is created. Nothing else of the audio ever touches disk.
+struct TempFileGuard {
+    explicit TempFileGuard(const CStringW& p) : path(p) { ::DeleteFileW(path); }
+    ~TempFileGuard() { ::DeleteFileW(path); }
+    CStringW path;
+};
+
 bool ReadWholeFile(const CStringW& path, std::vector<uint8_t>* out)
 {
     FILE* file = nullptr;
@@ -184,7 +194,7 @@ bool Encode(const std::vector<int16_t>& pcm, int sampleRate, Format format, int 
     }
 
     const CStringW path = TempFilePath();
-    ::DeleteFileW(path);
+    TempFileGuard tempFile(path);
 
     ComPtr<IMFSinkWriter> writer;
     HRESULT hr = ::MFCreateSinkWriterFromURL(path, nullptr, nullptr, &writer);
@@ -289,14 +299,12 @@ bool Encode(const std::vector<int16_t>& pcm, int sampleRate, Format format, int 
     writer.Reset();   // close the file before reading it back
 
     if (!ok) {
-        ::DeleteFileW(path);
         if (error != nullptr)
             *error = L"Ошибка кодирования AAC";
         return false;
     }
 
     const bool read = ReadWholeFile(path, out);
-    ::DeleteFileW(path);
 
     if (!read || out->empty()) {
         if (error != nullptr)
