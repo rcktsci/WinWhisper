@@ -245,23 +245,26 @@ void OverlayWindow::BuildMetrics(int dpiOverride)
 
     // Compact: the panel only has to hold a disc, one line of status and four
     // small targets, so it stays out of the way of whatever is underneath.
+    // 158x84 is half the old width and two thirds of the height; the disc and
+    // the glyphs shrink with it instead of being squashed, and the status line
+    // keeps a band of its own between the disc and the corner buttons.
     Metrics m;
-    m.width = Scale(316, dpi_);
-    m.height = Scale(126, dpi_);
-    m.micRadius = Scale(26, dpi_);
+    m.width = Scale(158, dpi_);
+    m.height = Scale(84, dpi_);
+    m.micRadius = Scale(16, dpi_);
     m.micCx = m.width / 2;
-    m.micCy = Scale(56, dpi_);
-    m.closeX = m.width - Scale(19, dpi_);
-    m.closeY = Scale(16, dpi_);
-    m.gearX = Scale(23, dpi_);
-    m.gearY = m.height - Scale(21, dpi_);
-    m.helpX = m.width - Scale(23, dpi_);
-    m.helpY = m.height - Scale(21, dpi_);
-    m.buttonRadius = Scale(12, dpi_);
-    m.statusTop = Scale(88, dpi_);
-    m.statusHeight = Scale(20, dpi_);
-    m.handleY = Scale(9, dpi_);
-    m.handleWidth = Scale(34, dpi_);
+    m.micCy = Scale(34, dpi_);
+    m.closeX = m.width - Scale(13, dpi_);
+    m.closeY = Scale(12, dpi_);
+    m.gearX = Scale(14, dpi_);
+    m.gearY = m.height - Scale(13, dpi_);
+    m.helpX = m.width - Scale(14, dpi_);
+    m.helpY = m.height - Scale(13, dpi_);
+    m.buttonRadius = Scale(8, dpi_);
+    m.statusTop = Scale(52, dpi_);
+    m.statusHeight = Scale(16, dpi_);
+    m.handleY = Scale(6, dpi_);
+    m.handleWidth = Scale(24, dpi_);
     metrics_ = m;
 
     BuildFonts();
@@ -272,7 +275,7 @@ void OverlayWindow::ApplyRegion()
     if (GetSafeHwnd() == nullptr)
         return;
     HRGN region = ::CreateRoundRectRgn(0, 0, metrics_.width + 1, metrics_.height + 1,
-                                       Scale(14, dpi_), Scale(14, dpi_));
+                                       Scale(10, dpi_), Scale(10, dpi_));
     ::SetWindowRgn(GetSafeHwnd(), region, TRUE);  // window owns it after this call
 }
 
@@ -473,12 +476,12 @@ void OverlayWindow::BuildFonts()
 
     // Segoe MDL2 Assets ships with Windows 10/11 and gives crisp, correctly
     // hinted icons at any DPI - much nicer than hand-rolled GDI shapes.
-    iconSmall_.CreatePointFont(pointSize(Scale(15, dpi_), dpi_), kIconFont);
-    textFont_.CreatePointFont(pointSize(Scale(13, dpi_), dpi_), kTextFont);
-    helpFont_.CreatePointFont(pointSize(Scale(15, dpi_), dpi_), kTextFont);
+    iconSmall_.CreatePointFont(pointSize(Scale(12, dpi_), dpi_), kIconFont);
+    textFont_.CreatePointFont(pointSize(Scale(10, dpi_), dpi_), kTextFont);
+    helpFont_.CreatePointFont(pointSize(Scale(12, dpi_), dpi_), kTextFont);
     // The emoji needs a noticeably larger em than the surrounding text: colour
     // glyphs carry their own padding.
-    emojiFont_.CreatePointFont(pointSize(Scale(26, dpi_), dpi_), kEmojiFont);
+    emojiFont_.CreatePointFont(pointSize(Scale(16, dpi_), dpi_), kEmojiFont);
     fontsReady_ = iconSmall_.GetSafeHandle() != nullptr;
 }
 
@@ -557,14 +560,14 @@ void OverlayWindow::DrawBackground(CDC& dc)
     const float half = Scale(1, dpi_) / 2.0f;
     const Gdiplus::RectF box(half, half, static_cast<float>(metrics_.width) - Scale(1, dpi_),
                              static_cast<float>(metrics_.height) - Scale(1, dpi_));
-    FillRounded(canvas.get(), box, static_cast<float>(Scale(12, dpi_)), FromColor(kSurface),
+    FillRounded(canvas.get(), box, static_cast<float>(Scale(9, dpi_)), FromColor(kSurface),
                 FromColor(kBorder), static_cast<float>(Scale(1, dpi_)));
 }
 
 void OverlayWindow::DrawHandle(CDC& dc)
 {
     SmoothCanvas canvas(dc);
-    const float thickness = static_cast<float>(std::max(2, Scale(3, dpi_)));
+    const float thickness = static_cast<float>(std::max(2, Scale(2, dpi_)));
     const float left = static_cast<float>(metrics_.width) / 2.0f -
                        static_cast<float>(metrics_.handleWidth) / 2.0f;
     const Gdiplus::RectF box(left, static_cast<float>(metrics_.handleY),
@@ -596,7 +599,7 @@ void OverlayWindow::DrawMic(CDC& dc)
         canvas.get().DrawEllipse(&edge, disc);
 
         // --- level ring: a quiet arc that only shows while something is heard --
-        const float thickness = static_cast<float>(std::max(2, Scale(3, dpi_)));
+        const float thickness = static_cast<float>(std::max(1, Scale(2, dpi_)));
         const float ringR = r + thickness * 0.6f;
         const Gdiplus::RectF ring(cx - ringR, cy - ringR, ringR * 2.0f, ringR * 2.0f);
         Gdiplus::Pen pen(Gdiplus::Color(0, 0, 0, 0), thickness);
@@ -650,7 +653,10 @@ void OverlayWindow::DrawStatus(CDC& dc)
     dc.SetBkMode(TRANSPARENT);
     dc.SetTextColor(model_.state == OverlayState::Error ? kDanger : RGB(0x55, 0x57, 0x5C));
 
-    CRect box(metrics_.width / 8, metrics_.statusTop, metrics_.width - metrics_.width / 8,
+    // Clear the corner buttons by hand: at this width the old 1/8 inset would run
+    // straight under the gear and the question mark.
+    const int sideInset = metrics_.gearX + metrics_.buttonRadius + Scale(8, dpi_);
+    CRect box(sideInset, metrics_.statusTop, metrics_.width - sideInset,
               metrics_.statusTop + metrics_.statusHeight);
     dc.DrawText(text, box, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
     if (old != nullptr)
