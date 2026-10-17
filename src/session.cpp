@@ -144,6 +144,35 @@ void Session::Stop()
     util::Log(L"[session] stopped, flushing");
 }
 
+void Session::Cancel()
+{
+    // Stopping the capture thread first makes it safe to touch the detector.
+    capture_.Stop();
+    // No vad_.Flush(): the tail of the phrase being recorded is dropped, not
+    // turned into a segment.
+    vad_.Reset();
+
+    level_.store(0.0f);
+    speaking_.store(false);
+
+    size_t dropped = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++generation_;
+        dropped = queue_.size() + results_.size();
+        queue_.clear();
+        results_.clear();
+        nextSeq_ = 0;
+        nextToDeliver_ = 0;
+        phase_ = SessionPhase::Idle;
+        active_ = false;
+        target_ = nullptr;
+        error_.Empty();
+    }
+    util::Log(L"[session] отменено пользователем, отброшено сегментов: %d",
+              static_cast<int>(dropped));
+}
+
 bool Session::IsActive() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -200,6 +229,7 @@ void Session::Enqueue(const std::vector<int16_t>& pcm)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         job.seq = nextSeq_++;
+        job.generation = generation_;
         job.pcm = pcm;
         queue_.push_back(std::move(job));
     }
@@ -354,6 +384,14 @@ void Session::WorkerMain()
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            // The user cancelled while this request was in flight: the audio did
+            // reach the server and cannot be recalled, but its answer must never
+            // be typed anywhere.
+            if (job.generation != generation_) {
+                util::Log(L"[stt] ответ отброшен: сегмент отменён пользователем");
+                networkBusy_.store(false);
+                continue;
+            }
             if (stored.ok && !stored.text.IsEmpty())
                 accumulatedText_ += util::WideToUtf8(stored.text) + " ";
             results_[job.seq] = std::move(stored);

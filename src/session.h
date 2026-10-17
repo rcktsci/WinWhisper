@@ -53,6 +53,11 @@ public:
     // everything queued has been delivered.
     void Stop();
 
+    // Drops everything: the phrase still being recorded is not even turned into a
+    // segment, queued segments are discarded, and a reply that is already on its
+    // way from the server is thrown away when it arrives. Nothing gets typed.
+    void Cancel();
+
     bool IsActive() const;
     HWND Target() const;
 
@@ -72,6 +77,9 @@ public:
 private:
     struct Job {
         uint64_t seq = 0;
+        // Which cancel "epoch" this job belongs to: a reply that comes back after
+        // the user cancelled carries an old number and is thrown away.
+        uint64_t generation = 0;
         std::vector<int16_t> pcm;   // encoded on the worker, not the audio thread
     };
 
@@ -103,6 +111,7 @@ private:
     std::map<uint64_t, Result> results_;
     uint64_t nextSeq_ = 0;
     uint64_t nextToDeliver_ = 0;
+    uint64_t generation_ = 0;
     bool workerStop_ = false;
     bool active_ = false;
     std::string accumulatedText_;

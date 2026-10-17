@@ -30,6 +30,7 @@ class CHostWindow;
 
 // Defined below, once CHostWindow is complete.
 void StopDictationFromHook(const wchar_t* reason);
+void CancelDictationFromHook(const wchar_t* reason);
 
 namespace {
 
@@ -48,7 +49,7 @@ constexpr UINT_PTR TIMER_UI = 1;
 
 // The version in one place for the log; the resource script and the manifest
 // carry the same number for the file properties Windows shows.
-constexpr wchar_t kVersion[] = L"1.1.9";
+constexpr wchar_t kVersion[] = L"1.1.11";
 
 // How long an error stays on screen before the panel disappears again.
 constexpr int kErrorTicks = 90;  // ~3 s at 33 ms
@@ -102,10 +103,12 @@ LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lParam)
         if (info != nullptr && !injected && !textins::IsTyping() &&
             !IsModifierKey(info->vkCode) && info->vkCode != g_hotkeyVk) {
             if (info->vkCode == VK_ESCAPE) {
-                // ESC belongs to the dictation, not to the app underneath, so it
-                // is swallowed. The overlay has no focus of its own, which is
-                // exactly why a hook is needed to see it at all.
-                StopDictationFromHook(L"ESC");
+                // ESC cancels the dictation outright: the microphone closes, the
+                // phrase being spoken is dropped instead of being sent, and an
+                // answer already on its way from the server is discarded. Nothing
+                // is typed. The key is swallowed, so the application underneath
+                // never sees it - no dialog of theirs can close by accident.
+                CancelDictationFromHook(L"ESC");
                 return 1;
             }
             // Any other real key means the user went back to typing: stop, but
@@ -131,6 +134,7 @@ public:
     bool CreateAndInit();
     void StartDictation();
     void StopDictation(const wchar_t* reason);
+    void CancelDictation(const wchar_t* reason);
 
     bool IsDictating() const { return active_; }
     bool PanelRect(RECT* out)
@@ -222,7 +226,7 @@ bool CHostWindow::CreateAndInit()
         StopDictation(L"справка");
         ShowTrayBalloon(L"WinWhisper",
                         L"Горячая клавиша начинает и останавливает диктовку.\r\n"
-                        L"ESC — остановить и вставить распознанное.\r\n"
+                        L"ESC — отменить: ничего не вставится.\r\n"
                         L"Текст вставляется в окно, где стоял курсор.");
     };
     overlay_.onMoved = [this](int x, int y) {
@@ -341,6 +345,12 @@ void StopDictationFromHook(const wchar_t* reason)
         g_host->StopDictation(reason);
 }
 
+void CancelDictationFromHook(const wchar_t* reason)
+{
+    if (g_host != nullptr)
+        g_host->CancelDictation(reason);
+}
+
 // ------------------------------------------------------------- dictation ---
 
 void CHostWindow::StartDictation()
@@ -405,10 +415,23 @@ void CHostWindow::StopDictation(const wchar_t* reason)
         return;
 
     active_ = false;
-    ArmHook(false);
     session_.Stop();
+    // The hook stays armed while an answer is still on its way: ESC must be able
+    // to cancel a phrase that has already been sent. Poll disarms it once the
+    // session is really idle.
+    ArmHook(session_.HasPendingWork());
     UpdateTray(false);
     util::Log(L"dictation stopped (%s)", reason != nullptr ? reason : L"");
+}
+
+void CHostWindow::CancelDictation(const wchar_t* reason)
+{
+    session_.Cancel();
+    active_ = false;
+    ArmHook(false);
+    UpdateTray(false);
+    overlay_.Hide();
+    util::Log(L"dictation cancelled (%s)", reason != nullptr ? reason : L"");
 }
 
 void CHostWindow::DeliverReadyText()
@@ -504,6 +527,11 @@ void CHostWindow::Poll()
 
     DeliverReadyText();
     session_.FinalizeIfDone();
+    if (!active_ && !session_.HasPendingWork()) {
+        // Nothing is recording and nothing is left to recognise: the keyboard
+        // belongs to the user again, including plain ESC.
+        ArmHook(false);
+    }
 
     const SessionSnapshot snapshot = session_.Snapshot();
     const bool overlayVisible = overlay_.IsVisible();
